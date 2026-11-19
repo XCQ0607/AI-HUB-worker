@@ -1,0 +1,110 @@
+name: Upstream Watch
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: upstream-watch
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  watch:
+    name: Check WNLUO/dsh-mobile-server
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Shallow-clone upstream reference
+        run: |
+          rm -rf _upstream_ref
+          git clone --depth=1 https://github.com/WNLUO/dsh-mobile-server.git _upstream_ref
+
+      - name: Compare upstream protocol & baseline
+        id: check
+        run: |
+          set +e
+          node scripts/sync-reference.mjs --check --ci --ref-dir _upstream_ref --json > sync_result.json
+          STATUS=$?
+          set -e
+          rm -rf _upstream_ref
+          cat sync_result.json
+          node -e '
+            const fs = require("fs");
+            const r = JSON.parse(fs.readFileSync("sync_result.json", "utf8"));
+            const out = process.env.GITHUB_OUTPUT;
+            const changed = r.upstreamUpdated ? "true" : "false";
+            const drift = (r.problems && r.problems.length > 0) ? "true" : "false";
+            fs.appendFileSync(out, `commit=${r.commit || ""}\n`);
+            fs.appendFileSync(out, `version=${r.relayVersion || ""}\n`);
+            fs.appendFileSync(out, `baseline_commit=${r.baselineCommit || ""}\n`);
+            fs.appendFileSync(out, `baseline_version=${r.baselineVersion || ""}\n`);
+            fs.appendFileSync(out, `changed=${changed}\n`);
+            fs.appendFileSync(out, `drift=${drift}\n`);
+          '
+          echo "sync exit status: $STATUS"
+
+      - name: Write job summary
+        run: |
+          {
+            echo "### Upstream Watch: \`WNLUO/dsh-mobile-server\`"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Upstream Commit | \`${{ steps.check.outputs.commit }}\` |"
+            echo "| Upstream Relay Version | \`${{ steps.check.outputs.version }}\` |"
+            echo "| Baseline Commit | \`${{ steps.check.outputs.baseline_commit }}\` |"
+            echo "| Baseline Relay Version | \`${{ steps.check.outputs.baseline_version }}\` |"
+            echo "| Upstream Updated | \`${{ steps.check.outputs.changed }}\` |"
+            echo "| Protocol Drift Detected | \`${{ steps.check.outputs.drift }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open or update tracking issue on upstream update / drift
+        if: steps.check.outputs.changed == 'true' || steps.check.outputs.drift == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          COMMIT="${{ steps.check.outputs.commit }}"
+          SHORT="${COMMIT:0:8}"
+          VER="${{ steps.check.outputs.version }}"
+          TITLE="[Upstream Watch] dsh-mobile-server updated to ${SHORT} (v${VER})"
+          BODY="$(node -e '
+            const fs = require("fs");
+            const r = JSON.parse(fs.readFileSync("sync_result.json", "utf8"));
+            const lines = [
+              "@XCQ0607 Upstream changes or protocol drift detected in `WNLUO/dsh-mobile-server`.",
+              "",
+              `- **Upstream Commit**: \`${r.commit}\``,
+              `- **Upstream Relay Version**: \`${r.relayVersion}\``,
+              `- **Baseline Commit**: \`${r.baselineCommit}\``,
+              `- **Baseline Relay Version**: \`${r.baselineVersion}\``,
+              `- **Upstream Updated**: ${r.upstreamUpdated}`,
+              "",
+              "### Protocol Check",
+              ...(r.problems && r.problems.length
+                ? r.problems.map(p => `- ❌ ${p}`)
+                : ["- ✅ Protocol table (`0x01`–`0x1E`) remains compatible with `worker/src/protocol.ts`."]),
+              "",
+              "To refresh locally: `node scripts/sync-reference.mjs --update-baseline`",
+            ];
+            process.stdout.write(lines.join("\n"));
+          ')"
+          EXISTING="$(gh issue list --repo "${{ github.repository }}" --state open --search "[Upstream Watch] in:title" --json number,title --jq '.[0].number // empty')"
+          if [ -n "$EXISTING" ]; then
+            gh issue edit "$EXISTING" --repo "${{ github.repository }}" --title "$TITLE" --body "$BODY"
+            echo "Updated existing issue #$EXISTING"
+          else
+            gh issue create --repo "${{ github.repository }}" --title "$TITLE" --body "$BODY"
+          fi

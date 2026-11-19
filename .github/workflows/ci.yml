@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify (Protocol / Typecheck / Build / Dry-run)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install worker dependencies
+        working-directory: worker
+        run: npm ci --no-audit --no-fund
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci --no-audit --no-fund
+
+      - name: Verify script syntax
+        run: |
+          node --check scripts/deploy.mjs
+          node --check scripts/sync-reference.mjs
+
+      - name: Verify protocol baseline (0x01-0x1E)
+        run: node scripts/sync-reference.mjs --check --ci
+
+      - name: Typecheck (worker & web)
+        run: npm run typecheck
+
+      - name: Build web admin console
+        run: npm run build:web
+
+      - name: Wrangler deploy dry-run
+        working-directory: worker
+        run: |
+          npx wrangler deploy --dry-run --outdir .dryrun
+          rm -rf .dryrun

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="aihub-g" x1="6" y1="6" x2="58" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6C8CFF"/>
+      <stop offset="0.55" stop-color="#8A6EFF"/>
+      <stop offset="1" stop-color="#34D399"/>
+    </linearGradient>
+    <linearGradient id="aihub-c" x1="16" y1="14" x2="48" y2="50" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#D7E3FF"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="56" height="56" rx="16" fill="url(#aihub-g)"/>
+  <path d="M32 14L17 46h7.2l3.1-7h9.4l3.1 7H47L32 14zm0 11.8l3.2 7.4h-6.4l3.2-7.4z" fill="url(#aihub-c)"/>
+  <circle cx="32" cy="14" r="3" fill="#34D399"/>
+  <circle cx="17" cy="46" r="2.8" fill="#FFFFFF"/>
+  <circle cx="47" cy="46" r="2.8" fill="#FFFFFF"/>
+  <path d="M13 27c3.5-5.5 9.5-9 19-9s15.5 3.5 19 9" stroke="#FFFFFF" stroke-opacity="0.38" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="3 4"/>
+</svg>

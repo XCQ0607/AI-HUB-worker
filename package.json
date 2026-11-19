@@ -1,0 +1,18 @@
+{
+  "name": "ai-hub-worker",
+  "version": "1.0.0",
+  "description": "Cloudflare Workers + Durable Objects port of WNLUO/dsh-mobile-server (DSH tunnel relay) with a React admin console.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "repository": { "type": "git", "url": "https://github.com/XCQ0607/AI-HUB-worker.git" },
+  "scripts": {
+    "install:all": "npm --prefix worker install && npm --prefix web install",
+    "build:web": "npm --prefix web run build",
+    "typecheck": "npm --prefix worker run typecheck && npm --prefix web run typecheck",
+    "dev": "npm --prefix worker run dev",
+    "sync:ref": "node scripts/sync-reference.mjs",
+    "check:ref": "node scripts/sync-reference.mjs --check",
+    "deploy": "node scripts/deploy.mjs"
+  }
+}

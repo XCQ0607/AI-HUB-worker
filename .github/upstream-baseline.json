@@ -1,0 +1,53 @@
+{
+  "upstream": "WNLUO/dsh-mobile-server",
+  "commit": "2bfb5b82e43e91d24b0cfdd30f4e1a81eb276c4e",
+  "relayVersion": "0.1.27",
+  "headerLen": 9,
+  "mobilePrefix": "/api/mobile/v1/",
+  "ownedPaths": [
+    "/",
+    "/healthz",
+    "/status",
+    "/api/mobile/v1/health",
+    "/api/mobile/v1/push-token",
+    "/tunnel"
+  ],
+  "reservedCloseCodes": [
+    1004,
+    1005,
+    1006,
+    1015
+  ],
+  "frameTypes": {
+    "register": "0x01",
+    "registered": "0x02",
+    "updatePairing": "0x03",
+    "httpRequest": "0x04",
+    "httpBody": "0x05",
+    "httpHead": "0x06",
+    "httpChunk": "0x07",
+    "httpEnd": "0x08",
+    "httpError": "0x09",
+    "wsUpgrade": "0x0a",
+    "wsOpen": "0x0b",
+    "wsError": "0x0c",
+    "wsText": "0x0d",
+    "wsBinary": "0x0e",
+    "wsClose": "0x0f",
+    "ping": "0x10",
+    "pong": "0x11",
+    "pairRequest": "0x12",
+    "pairConfirm": "0x13",
+    "httpCancel": "0x14",
+    "httpPause": "0x15",
+    "httpResume": "0x16",
+    "sync": "0x17",
+    "revokeAll": "0x18",
+    "revokeAllAck": "0x19",
+    "pushRegister": "0x1a",
+    "pushSend": "0x1b",
+    "migrate": "0x1c",
+    "blobPut": "0x1d",
+    "blobDelete": "0x1e"
+  }
+}

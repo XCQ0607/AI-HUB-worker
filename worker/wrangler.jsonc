@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ai-hub-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-09-01",
+  "durable_objects": { "bindings": [{ "name": "HUB", "class_name": "Hub" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Hub"] }],
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
+  "vars": { "ADMISSION_MODE": "open", "MIN_PLUGIN_VERSION": "", "MIRROR_CACHE": "1", "MIRROR_FALLBACK_MS": "0", "DO_LOCATION": "" },
+  "observability": { "enabled": true }
+}
