@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 export function parseJsonc(str) {
   const src = String(str).replace(/^\uFEFF/, '')
@@ -110,9 +110,11 @@ export async function main() {
   const npmInstallArgs = dir => [existsSync(join(dir, 'package-lock.json')) ? 'ci' : 'install', '--no-audit', '--no-fund']
 
   step(1, 'install dependencies & build admin console')
-  run('npm', npmInstallArgs(worker), { cwd: worker, retries: 2 })
+  const skipInstall = (process.env.SKIP_INSTALL || env.SKIP_INSTALL) === '1'
+  if (!skipInstall) run('npm', npmInstallArgs(worker), { cwd: worker, retries: 2 })
   if (existsSync(join(web, 'package.json'))) {
-    run('npm', npmInstallArgs(web), { cwd: web, retries: 2 }); run('npm', ['run', 'build'], { cwd: web })
+    if (!skipInstall) run('npm', npmInstallArgs(web), { cwd: web, retries: 2 })
+    run('npm', ['run', 'build'], { cwd: web })
   } else if (!existsSync(join(worker, 'public', 'platform', 'index.html'))) throw new Error('web/ missing and worker/public not built')
 
   step(2, 'resolve Cloudflare account')
@@ -196,7 +198,18 @@ export async function main() {
   if (url && env.ADMIN_EMAIL && env.ADMIN_PASSWORD && adminToken) {
     await new Promise(r => setTimeout(r, 6000))
     try {
-      const r = await fetch(`${url}/api/platform/v1/admin/bootstrap`, { method: 'POST', headers: { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ email: env.ADMIN_EMAIL, password: env.ADMIN_PASSWORD }) })
+      let fetchFn = fetch, dispatcher
+      const proxy = env.HTTPS_PROXY || env.HTTP_PROXY || env.https_proxy || env.http_proxy
+      if (proxy && existsSync(join(worker, 'node_modules', 'undici', 'index.js'))) {
+        const u = await import(pathToFileURL(join(worker, 'node_modules', 'undici', 'index.js')).href)
+        fetchFn = u.fetch; dispatcher = new u.ProxyAgent(proxy)
+      }
+      const r = await fetchFn(`${url}/api/platform/v1/admin/bootstrap`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: env.ADMIN_EMAIL, password: env.ADMIN_PASSWORD }),
+        ...(dispatcher ? { dispatcher } : {}),
+      })
       console.log('  bootstrap HTTP', r.status, r.status === 200 ? '' : await r.text()); out.admin = env.ADMIN_EMAIL
     } catch (e) {
       console.log(`  could not reach ${url} (${e.message}). If workers.dev is blocked, bind a custom domain then run:`)

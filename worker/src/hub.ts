@@ -66,7 +66,7 @@ export class Hub extends DurableObject<Env> {
   }
 
   // ---------- helpers ----------
-  private nextId() { do { this.seq = (this.seq + 1) >>> 0 || 1 } while (this.pending.has(this.seq)); return this.seq }
+  private nextId() { do { this.seq = (this.seq + 1) >>> 0 || 1 } while (this.pending.has(this.seq) || this.wsState.has(this.seq)); return this.seq }
   private tunnels(): { ws: WebSocket; att: TAtt }[] {
     return this.ctx.getWebSockets('tunnel').map(ws => ({ ws, att: ws.deserializeAttachment() as TAtt })).filter(x => x.att?.kind === 'tunnel')
   }
@@ -460,6 +460,7 @@ export class Hub extends DurableObject<Env> {
       const res = await fetch(`${master.replace(/\/+$/, '')}/api/platform/v1/nodes/report`, {
         method: 'POST',
         headers,
+        signal: AbortSignal.timeout(10_000),
         body: JSON.stringify({
           name: this.env.PLATFORM_NODE_NAME || 'AI-HUB Worker',
           publicUrl: this.env.PUBLIC_BASE_URL || '',

@@ -23,8 +23,9 @@ function isPrivateIp6(raw: string): boolean {
   if (host === '::' || host === '::1') return true
   if (host.startsWith('100::')) return true
   if (host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe8') || host.startsWith('fe9') || host.startsWith('fea') || host.startsWith('feb') || host.startsWith('ff')) return true
-  if (host.startsWith('::ffff:') || host.startsWith('64:ff9b::')) {
-    const tail = host.split('::').pop() ?? ''
+  const m = /^(?:::ffff:(?:0:)?|64:ff9b:(?:1::|:)|::)([^/]+)$/.exec(host)
+  if (m) {
+    const tail = m[1]
     if (isPrivateIp4(tail)) return true
     const parts = tail.split(':')
     if (parts.length === 2 && /^[0-9a-f]{1,4}$/.test(parts[0]) && /^[0-9a-f]{1,4}$/.test(parts[1])) {
@@ -42,8 +43,8 @@ export function checkWebhookUrl(raw: string): string | null {
   try { u = new URL(raw.trim()) } catch { return 'URL 格式无效' }
   if (u.protocol !== 'https:') return '仅支持 HTTPS 地址'
   if (u.username || u.password) return 'URL 中不允许包含用户名或密码'
-  const h = u.hostname.toLowerCase()
-  if (!h || h === 'localhost' || h.endsWith('.local') || h.endsWith('.internal')) return '不允许内网或本地域名'
+  const h = u.hostname.toLowerCase().replace(/\.+$/, '')
+  if (!h || h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal')) return '不允许内网或本地域名'
   if (isPrivateIp4(h) || isPrivateIp6(h)) return '不允许私网或保留 IP 地址'
   return null
 }
