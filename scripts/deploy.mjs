@@ -199,7 +199,7 @@ export async function main() {
     await new Promise(r => setTimeout(r, 6000))
     try {
       let fetchFn = fetch, dispatcher
-      const proxy = env.HTTPS_PROXY || env.HTTP_PROXY || env.https_proxy || env.http_proxy
+      const proxy = env.HTTPS_PROXY || env.HTTP_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.https_proxy || process.env.http_proxy
       if (proxy && existsSync(join(worker, 'node_modules', 'undici', 'index.js'))) {
         const u = await import(pathToFileURL(join(worker, 'node_modules', 'undici', 'index.js')).href)
         fetchFn = u.fetch; dispatcher = new u.ProxyAgent(proxy)

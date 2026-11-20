@@ -568,7 +568,7 @@ export class Hub extends DurableObject<Env> {
   private cleanHeaders(req: Request, ws = false) {
     const out: Record<string, string> = {}
     req.headers.forEach((v, k) => {
-      if (!forwardable(k) || k.startsWith('cf-') || k.startsWith('x-aihub-') || k === 'cdn-loop' || (ws && k.startsWith('sec-websocket-'))) return
+      if (!forwardable(k) || k.startsWith('cf-') || k === 'x-aihub-colo' || k === 'x-aihub-country' || k === 'cdn-loop' || (ws && k.startsWith('sec-websocket-'))) return
       out[k] = v
     })
     const ip = req.headers.get('cf-connecting-ip')
