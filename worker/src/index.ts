@@ -25,7 +25,7 @@ export default {
     const hint = env.DO_LOCATION?.trim().toLowerCase()
     const opt = hint && LOCATIONS.has(hint) ? { locationHint: hint as DurableObjectLocationHint } : undefined
     const headers = new Headers(req.headers)
-    for (const k of [...headers.keys()]) if (k.toLowerCase().startsWith('x-aihub-')) headers.delete(k)
+    headers.delete('x-aihub-colo'); headers.delete('x-aihub-country')
     const cf = (req as any).cf
     if (cf?.colo) headers.set('x-aihub-colo', String(cf.colo))
     if (cf?.country) headers.set('x-aihub-country', String(cf.country))
