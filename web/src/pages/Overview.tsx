@@ -81,7 +81,7 @@ export function Overview({ onNav }: { onNav: (tab: any) => void }) {
     // Step 3: Browser WSS /tunnel handshake
     t0 = performance.now()
     if (!ticket) {
-      steps.push({ name: '3. WSS /tunnel 握手探测', ok: false, ms: 0, detail: '未获取到诊断凭据，跳过 WSS 探测' })
+      steps.push({ name: '3. 浏览器到边缘 WSS /tunnel 握手', ok: false, ms: 0, detail: '未获取到诊断凭据，跳过 WSS 探测' })
       setDiagSteps([...steps])
       setProbing(false)
       toast('诊断发现异常，请查看详情', 'error')
@@ -95,7 +95,7 @@ export function Overview({ onNav }: { onNav: (tab: any) => void }) {
         if (settled) return
         settled = true
         clearTimeout(timer)
-        steps.push({ name: '3. WSS /tunnel 握手探测', ok, ms: Math.round(performance.now() - t0), detail })
+        steps.push({ name: '3. 浏览器到边缘 WSS /tunnel 握手', ok, ms: Math.round(performance.now() - t0), detail })
         resolve()
       }
       const timer = setTimeout(() => { try { ws.close() } catch { /* */ } done(false, '握手超时 (5s)') }, 5000)
@@ -117,11 +117,17 @@ export function Overview({ onNav }: { onNav: (tab: any) => void }) {
 
   const origin = location.origin
   const wsUrl = origin.replace(/^http/, 'ws') + '/tunnel'
+  const relayConfigJson = JSON.stringify(
+    selLic ? { relayUrl: origin, licenseCode: selLic } : { relayUrl: origin },
+    null,
+    2,
+  )
   const headlessSnippet = [
-    `DSH_RELAY_URL="${origin}"`,
-    selLic ? `DSH_RELAY_LICENSE="${selLic}"` : `# DSH_RELAY_LICENSE="" (当前开放模式可留空)`,
-    `# 若启用了 TUNNEL_REGISTER_SECRET，请同时配置：`,
-    `# DSH_RELAY_REGISTER_SECRET="your-secret"`,
+    `# 方式 A：写入宿主 ~/.dsh/relay.json（或通过桌面插件面板 / POST /api/relay/config 设置）`,
+    relayConfigJson,
+    ``,
+    `# 方式 B：若中转端启用了 TUNNEL_REGISTER_SECRET，在宿主进程中设置环境变量：`,
+    `export DSH_RELAY_REGISTER_SECRET="your-secret"`,
   ].join('\n')
 
   if (!o) return <p className="muted pad">正在加载概览数据…</p>
@@ -135,7 +141,7 @@ export function Overview({ onNav }: { onNav: (tab: any) => void }) {
         </div>
         <div className="btn-row">
           <button className="btn-primary btn-sm" onClick={openWizard}><Compass size={14} />零门槛接入向导</button>
-          <button className="icon-btn" onClick={load} title="刷新"><RefreshCw size={14} /></button>
+          <button className="icon-btn" onClick={load} title="刷新" aria-label="刷新概览"><RefreshCw size={14} /></button>
         </div>
       </div>
 
@@ -157,7 +163,7 @@ export function Overview({ onNav }: { onNav: (tab: any) => void }) {
           hint={o.apns?.enabled ? 'ES256 推送通道就绪' : '可改用 Webhook 桥接'}
           icon={<Bell size={16} className="muted" />} />
         <StatCard label="节点联邦" value={o.role === 'slave' ? '被控端' : `${o.nodes?.online ?? 0} / ${o.nodes?.total ?? 0}`} onClick={() => onNav('nodes')}
-          hint={o.role === 'slave' ? (o.masterLastError ? '上报异常' : '已挂载主控端') : '在线 / 全部被控节点'}
+          hint={o.role === 'slave' ? (o.masterLastError ? '上报异常' : o.masterLastReportAt ? '已挂载主控端' : '待首次上报（需配置认领码）') : '在线 / 全部被控节点'}
           icon={<Network size={16} className="muted" />} />
         <StatCard label="插件 OTA / 迁移" value={`${o.ota?.count ?? 0} / ${o.migrations ?? 0}`} onClick={() => onNav('ota')}
           hint={`最低版本门槛: ${o.minVersion || '不限'}`}
@@ -165,7 +171,7 @@ export function Overview({ onNav }: { onNav: (tab: any) => void }) {
       </div>
 
       <div className="two-col">
-        <Card title="24 小时流量遥测 (UTC)" subtitle={tel ? `累计 ${tel.quota.todayReqs} 次请求 · 悬停柱条查看详情` : '加载遥测中…'}>
+        <Card title="24 小时流量遥测 (UTC)" subtitle={tel ? `累计 ${tel.quota.todayReqs} 次请求 · 悬停、点击或聚焦柱条查看详情` : '加载遥测中…'}>
           {!tel ? <p className="muted small">暂无遥测数据</p> : (() => {
             const maxR = Math.max(1, ...tel.hours.map(h => h.reqs))
             const totalBytes = tel.hours.reduce((a, h) => a + h.bytesIn + h.bytesOut, 0)
@@ -179,10 +185,10 @@ export function Overview({ onNav }: { onNav: (tab: any) => void }) {
                       {hovered.label} · {hovered.reqs} reqs · 镜像 {hovered.mirrorHits} · {bytes(hovered.bytesIn + hovered.bytesOut)}
                     </Badge>
                   ) : (
-                    <span className="muted small">将鼠标移至柱条查看各时段请求与镜像命中详情</span>
+                    <span className="muted small">悬停、点击或使用键盘聚焦柱条查看各时段请求与镜像命中详情</span>
                   )}
                 </div>
-                <svg viewBox="0 0 480 128" style={{ width: '100%', height: 136, display: 'block' }} onMouseLeave={() => setHoverIdx(null)}>
+                <svg viewBox="0 0 480 128" style={{ width: '100%', height: 136, display: 'block' }} onMouseLeave={() => setHoverIdx(null)} role="img" aria-label="24 小时流量遥测柱状图">
                   {[0.25, 0.5, 0.75, 1].map(g => (
                     <line key={g} x1={0} x2={480} y1={108 - g * 92} y2={108 - g * 92} stroke="var(--line)" strokeDasharray="3 3" />
                   ))}
@@ -192,7 +198,17 @@ export function Overview({ onNav }: { onNav: (tab: any) => void }) {
                     const mh = h.mirrorHits > 0 ? Math.max(3, Math.round((h.mirrorHits / maxR) * 92)) : 0
                     const active = hoverIdx === i
                     return (
-                      <g key={h.hour} onMouseEnter={() => setHoverIdx(i)} style={{ cursor: 'pointer' }}>
+                      <g
+                        key={h.hour}
+                        tabIndex={0}
+                        role="button"
+                        aria-label={`${h.label}：${h.reqs} 次请求，离线镜像命中 ${h.mirrorHits} 次，流量 ${bytes(h.bytesIn + h.bytesOut)}`}
+                        onMouseEnter={() => setHoverIdx(i)}
+                        onFocus={() => setHoverIdx(i)}
+                        onClick={() => setHoverIdx(prev => (prev === i ? null : i))}
+                        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setHoverIdx(i) } }}
+                        style={{ cursor: 'pointer', outline: 'none' }}
+                      >
                         <rect x={x - 2} y={8} width={18} height={104} fill={active ? 'var(--accent-soft)' : 'transparent'} rx={4} />
                         <rect x={x} y={108 - bh} width={14} height={bh} rx={3} fill={h.reqs > 0 ? (active ? 'var(--accent)' : 'rgba(99, 102, 241, 0.72)') : 'var(--line)'} />
                         {mh > 0 && <rect x={x} y={108 - Math.min(bh, mh)} width={14} height={Math.min(bh, mh)} rx={2} fill="var(--ok)" />}
@@ -243,14 +259,14 @@ export function Overview({ onNav }: { onNav: (tab: any) => void }) {
       </div>
 
       <div className="two-col">
-        <Card title="接入地址与三步实时诊断" subtitle="串行探测 HTTP 存活、移动端体检与浏览器 WSS 隧道握手"
+        <Card title="接入地址与三步实时诊断" subtitle="串行探测 HTTP 存活、移动端体检与浏览器到边缘节点的 WSS 握手（第 3 步仅测试 WSS 连通，不校验宿主注册密钥或激活码）"
           action={<button className="btn-ghost btn-sm" onClick={runDiagnostics} disabled={probing}><Activity size={14} />{probing ? '探测中…' : '三步一键诊断'}</button>}>
           <div className="kv-list">
             {[
               ['手机 App 中转地址', origin],
               ['宿主插件隧道 (WSS)', wsUrl],
               ['健康检查端点', origin + '/healthz'],
-              ['插件 OTA 检查源', origin + '/api/desktop-plugins/ota/latest'],
+              ['插件 OTA 检查源 (需附带 ?platform=&channel=)', origin + '/api/desktop-plugins/ota/latest?platform=win32&channel=stable'],
             ].map(([k, v]) => (
               <div className="kv-row" key={k}>
                 <span className="muted">{k}</span>
@@ -306,8 +322,8 @@ export function Overview({ onNav }: { onNav: (tab: any) => void }) {
             </div>
           </div>
           <div>
-            <div className="muted small" style={{ marginBottom: 6 }}>2. 无头服务器 / CLI 环境变量片段</div>
-            <div className="code-box"><pre>{headlessSnippet}</pre><CopyBtn value={headlessSnippet} label="环境变量" /></div>
+            <div className="muted small" style={{ marginBottom: 6 }}>2. 无头服务器 / CLI 配置方式（配置文件 + 注册密钥环境变量）</div>
+            <div className="code-box"><pre>{headlessSnippet}</pre><CopyBtn value={headlessSnippet} label="配置片段" /></div>
           </div>
         </div>
       </Modal>

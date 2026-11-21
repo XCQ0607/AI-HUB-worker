@@ -13,6 +13,8 @@ export function Storage() {
   const [mirror, setMirror] = useState<any>(null)
   const [blobs, setBlobs] = useState<any>(null)
   const [push, setPush] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+  const [errs, setErrs] = useState<{ mirror?: string; blobs?: string; push?: string }>({})
   const [fallbackMs, setFallbackMs] = useState('0')
   const [confirmClear, setConfirmClear] = useState<{ kind: 'mirror' | 'blobs' | 'push'; instance?: string; deviceId?: string } | null>(null)
   const [testPush, setTestPush] = useState<{ instance: string; deviceId: string } | null>(null)
@@ -21,11 +23,28 @@ export function Storage() {
   const [busy, setBusy] = useState(false)
 
   const load = useCallback(async () => {
-    try {
-      const [m, b, p] = await Promise.all([api<any>('/mirror'), api<any>('/blobs'), api<any>('/push/tokens')])
-      setMirror(m); setFallbackMs(String(m.fallbackMs ?? 0))
-      setBlobs(b); setPush(p)
-    } catch (e: any) { toast(e.message, 'error') }
+    const [m, b, p] = await Promise.allSettled([api<any>('/mirror'), api<any>('/blobs'), api<any>('/push/tokens')])
+    const nextErrs: { mirror?: string; blobs?: string; push?: string } = {}
+    if (m.status === 'fulfilled') {
+      setMirror(m.value)
+      setFallbackMs(String(m.value.fallbackMs ?? 0))
+    } else {
+      nextErrs.mirror = m.reason?.message || '读取离线镜像失败'
+    }
+    if (b.status === 'fulfilled') {
+      setBlobs(b.value)
+    } else {
+      nextErrs.blobs = b.reason?.message || '读取 R2 密文列表失败'
+    }
+    if (p.status === 'fulfilled') {
+      setPush(p.value)
+    } else {
+      nextErrs.push = p.reason?.message || '读取 APNs 令牌失败'
+    }
+    setErrs(nextErrs)
+    const errMsgs = Object.values(nextErrs)
+    if (errMsgs.length > 0) toast(errMsgs[0], 'error')
+    setLoading(false)
   }, [toast])
 
   useEffect(() => { load() }, [load])
@@ -83,8 +102,18 @@ export function Storage() {
           <button className={sub === 'push' ? 'active' : ''} onClick={() => { setSub('push'); setPage(1); setQ('') }}>iOS APNs 推送</button>
           <button className={sub === 'webhooks' ? 'active' : ''} onClick={() => { setSub('webhooks'); setPage(1); setQ('') }}>Webhook 推送与告警</button>
         </div>
-        <button className="icon-btn" onClick={load} title="刷新"><RefreshCw size={14} /></button>
+        <button className="icon-btn" onClick={load} title="刷新" aria-label="刷新存储与推送数据"><RefreshCw size={14} /></button>
       </div>
+      {sub !== 'webhooks' && (
+        <div className="banner">
+          <span className="small">
+            <b>三类数据区别：</b>
+            <b>离线镜像</b>（DO SQLite）缓存最近一次会话/工作区清单供断线兜底；
+            <b>R2 历史密文</b>（Cloudflare R2）存放宿主端到端加密的历史消息与文件密文（中转不持钥、7 天自动淘汰）；
+            <b>APNs 推送令牌</b>仅记录已配对 iOS 设备的推送凭据，用于锁屏提醒。
+          </span>
+        </div>
+      )}
       {sub !== 'webhooks' && (
         <div className="toolbar">
           <div className="search-box">
@@ -94,8 +123,13 @@ export function Storage() {
         </div>
       )}
 
-      {sub === 'mirror' && mirror && (
-        <Card title="离线镜像兜底 (0x17 sync)" subtitle="宿主断线时向已配对手机返回带 stale 标记的最近一次会话/工作区清单"
+      {sub === 'mirror' && (
+        loading && !mirror ? <p className="muted pad">正在加载离线镜像数据…</p> : !mirror ? (
+          <Card title="离线镜像兜底 (0x17 sync)">
+            <EmptyState icon={<HardDrive size={22} />} title="加载离线镜像失败" hint={errs.mirror} action={<button className="btn-ghost btn-sm" onClick={load}>重试</button>} />
+          </Card>
+        ) : (
+        <Card title="离线镜像兜底 (0x17 sync)" subtitle="宿主断线时向已配对手机返回带 stale 标记的最近一次会话/工作区清单；关闭正文缓存后仍保留已配对手机的凭据摘要以校验 /push-token 和 /blob/*"
           action={
             <div className="btn-row">
               <button className="btn-ghost" onClick={toggleMirror}>{mirror.enabled ? '停用正文缓存' : '启用离线镜像'}</button>
@@ -111,7 +145,7 @@ export function Storage() {
               <ProgressBar value={mirror.bytes} max={mirror.budget} />
             </div>
             <div className="btn-row">
-              <input type="number" min={0} max={30000} value={fallbackMs} onChange={e => setFallbackMs(e.target.value)} style={{ width: 110 }} placeholder="0" />
+              <input type="number" min={0} max={30000} aria-label="慢隧道回退阈值毫秒" value={fallbackMs} onChange={e => setFallbackMs(e.target.value)} style={{ width: 110 }} placeholder="0" />
               <button className="btn-primary btn-sm" onClick={saveFallback}>保存超时回退(ms)</button>
             </div>
           </div>
@@ -131,7 +165,7 @@ export function Storage() {
                       <span data-label="凭据数">{m.credsCount}</span>
                       <span data-label="大小">{bytes(m.bytes)}</span>
                       <span className="muted" data-label="更新时间">{ago(m.updated)}</span>
-                      <span className="actions"><button className="icon-btn danger" onClick={() => setConfirmClear({ kind: 'mirror', instance: m.instance })}><Trash2 size={14} /></button></span>
+                      <span className="actions"><button className="icon-btn danger" title="清理镜像" aria-label={`清理实例 ${m.instance} 的镜像`} onClick={() => setConfirmClear({ kind: 'mirror', instance: m.instance })}><Trash2 size={14} /></button></span>
                     </div>
                   ))}
                 </div>
@@ -140,9 +174,15 @@ export function Storage() {
             )
           })()}
         </Card>
+        )
       )}
 
-      {sub === 'blobs' && blobs && (
+      {sub === 'blobs' && (
+        loading && !blobs ? <p className="muted pad">正在加载 R2 密文数据…</p> : !blobs ? (
+          <Card title="R2 历史密文存储 (0x1D / 0x1E)">
+            <EmptyState icon={<Database size={22} />} title="加载 R2 密文列表失败" hint={errs.blobs} action={<button className="btn-ghost btn-sm" onClick={load}>重试</button>} />
+          </Card>
+        ) : (
         <Card title="R2 历史密文存储 (0x1D / 0x1E)" subtitle="仅保存宿主用实例历史密钥加密后的密文，7 天自动淘汰，中转不持钥、不解密"
           action={<div className="btn-row">
             <Badge tone={blobs.enabled ? 'ok' : 'warn'}>{blobs.enabled ? 'R2 已绑定' : '未绑定 R2'}</Badge>
@@ -163,7 +203,7 @@ export function Storage() {
                         <span data-label="条数">{b.count}</span>
                         <span data-label="占用空间">{bytes(b.bytes)}</span>
                         <span className="muted" data-label="最近写入">{ago(b.updated)}</span>
-                        <span className="actions"><button className="icon-btn danger" onClick={() => setConfirmClear({ kind: 'blobs', instance: b.instance })}><Trash2 size={14} /></button></span>
+                        <span className="actions"><button className="icon-btn danger" title="清理密文" aria-label={`清理实例 ${b.instance} 的密文`} onClick={() => setConfirmClear({ kind: 'blobs', instance: b.instance })}><Trash2 size={14} /></button></span>
                       </div>
                     ))}
                   </div>
@@ -172,9 +212,15 @@ export function Storage() {
               )
             })()}
         </Card>
+        )
       )}
 
-      {sub === 'push' && push && (
+      {sub === 'push' && (
+        loading && !push ? <p className="muted pad">正在加载 APNs 推送令牌…</p> : !push ? (
+          <Card title="iOS APNs 离线推送">
+            <EmptyState icon={<Bell size={22} />} title="加载 APNs 令牌失败" hint={errs.push} action={<button className="btn-ghost btn-sm" onClick={load}>重试</button>} />
+          </Card>
+        ) : (
         <Card title="iOS APNs 离线推送" subtitle="使用 WebCrypto ES256 JWT 直连 Apple APNs，锁屏状态下接收会话完成/审批通知"
           action={<Badge tone={push.enabled ? 'ok' : 'warn'}>{push.enabled ? 'APNs 密钥已配置' : '未配置 APNS_* 密钥'}</Badge>}>
           {push.items.length === 0 ? <EmptyState icon={<Bell size={22} />} title="暂无设备推送令牌" hint="手机 App 配对并授权通知权限后会自动上报令牌" /> : (() => {
@@ -193,8 +239,8 @@ export function Storage() {
                       <code className="muted" data-label="令牌摘要">{p.tokenPreview}</code>
                       <span className="muted" data-label="更新时间">{ago(p.updated)}</span>
                       <span className="actions">
-                        <button className="icon-btn" title="发送测试推送" disabled={!push.enabled} onClick={() => setTestPush({ instance: p.instance, deviceId: p.deviceId })}><Send size={14} /></button>
-                        <button className="icon-btn danger" title="删除令牌" onClick={() => setConfirmClear({ kind: 'push', instance: p.instance, deviceId: p.deviceId })}><Trash2 size={14} /></button>
+                        <button className="icon-btn" title="发送测试推送" aria-label={`向设备 ${p.deviceId} 发送测试推送`} disabled={!push.enabled} onClick={() => setTestPush({ instance: p.instance, deviceId: p.deviceId })}><Send size={14} /></button>
+                        <button className="icon-btn danger" title="删除令牌" aria-label={`删除设备 ${p.deviceId} 的推送令牌`} onClick={() => setConfirmClear({ kind: 'push', instance: p.instance, deviceId: p.deviceId })}><Trash2 size={14} /></button>
                       </span>
                     </div>
                   ))}
@@ -204,6 +250,7 @@ export function Storage() {
             )
           })()}
         </Card>
+        )
       )}
 
       {sub === 'webhooks' && <WebhooksPanel />}

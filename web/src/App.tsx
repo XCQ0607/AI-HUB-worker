@@ -152,7 +152,7 @@ function Shell() {
       <aside className={`sidebar ${menuOpen ? 'open' : ''}`}>
         <div className="brand-row">
           <div className="brand"><BrandLogo size={32} /><div><h2>AI-HUB</h2><small className="muted">Worker Relay</small></div></div>
-          <button className="icon-btn mobile-only" onClick={() => setMenuOpen(false)}><X size={18} /></button>
+          <button className="icon-btn mobile-only" aria-label="关闭侧边栏" onClick={() => setMenuOpen(false)}><X size={18} /></button>
         </div>
         <nav className="nav">
           {NAV.map(g => (
@@ -169,7 +169,7 @@ function Shell() {
         <div className="foot">
           <div className="user-pill" title={me}>{me}</div>
           <div className="foot-act">
-            <button className="icon-btn" title="切换主题" onClick={() => setDark(!dark)}>{dark ? <Sun size={15} /> : <Moon size={15} />}</button>
+            <button className="icon-btn" title="切换主题" aria-label={dark ? '切换为浅色主题' : '切换为深色主题'} onClick={() => setDark(!dark)}>{dark ? <Sun size={15} /> : <Moon size={15} />}</button>
             <button className="btn-ghost btn-sm" onClick={async () => { await api('/auth/logout', { method: 'POST' }); setMe(null) }}>
               <LogOut size={14} />退出登录
             </button>
@@ -181,7 +181,7 @@ function Shell() {
       <main className="main">
         <header className="topbar">
           <div className="btn-row">
-            <button className="icon-btn mobile-only" onClick={() => setMenuOpen(true)}><Menu size={18} /></button>
+            <button className="icon-btn mobile-only" aria-label="打开导航菜单" onClick={() => setMenuOpen(true)}><Menu size={18} /></button>
             <h1>{currentTitle}</h1>
           </div>
         </header>

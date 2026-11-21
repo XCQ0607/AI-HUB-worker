@@ -1,15 +1,32 @@
-node_modules
-.wrangler
-.dev.vars
-deploy-output.json
-env.json
-.secrets.tmp.json
+# Dependencies & build outputs
+node_modules/
+dist/
+worker/public/
+*.tsbuildinfo
+
+# Wrangler, generated configs & dry-run outputs
+.wrangler/
 wrangler.generated.json
 .dryrun
+
+# Local secrets & environment files
+.dev.vars
+.dev.vars.*
+.env
+.env.*
+env.json
+deploy-output.json
+.secrets.tmp.json
+
+# Private keys & certificates (APNs / TLS)
+*.p8
+*.pem
+*.key
+
+# Local scratch, upstream reference, logs & OS artifacts
 /reference
 /.dev
-worker/public/
-dist
 *.log
 *.zip
 .DS_Store
+Thumbs.db

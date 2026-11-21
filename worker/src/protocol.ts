@@ -88,15 +88,22 @@ export async function sha256Hex(s: string | Uint8Array) {
   return [...new Uint8Array(d)].map(x => x.toString(16).padStart(2, '0')).join('')
 }
 export function cmpVersion(a: string, b: string) {
-  const pa = a.replace(/^v/, '').split('.').map(Number), pb = b.replace(/^v/, '').split('.').map(Number)
-  for (let i = 0; i < 3; i++) { const d = (pa[i] || 0) - (pb[i] || 0); if (d) return d < 0 ? -1 : 1 }
+  const parse = (s: string) => s.replace(/^v/i, '').split('.').map(seg => {
+    const m = /^(\d+)/.exec(seg.trim())
+    return m ? Number(m[1]) : 0
+  })
+  const pa = parse(a), pb = parse(b)
+  const len = Math.max(3, pa.length, pb.length)
+  for (let i = 0; i < len; i++) { const d = (pa[i] || 0) - (pb[i] || 0); if (d) return d < 0 ? -1 : 1 }
   return 0
 }
 
 export function ctEq(a: string, b: string) {
-  if (a.length !== b.length) return false
-  let d = 0
-  for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i)
+  const len = Math.max(a.length, b.length)
+  let d = a.length ^ b.length
+  for (let i = 0; i < len; i++) {
+    d |= (i < a.length ? a.charCodeAt(i) : 0) ^ (i < b.length ? b.charCodeAt(i) : 0)
+  }
   return d === 0
 }
 

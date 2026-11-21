@@ -75,18 +75,31 @@ export async function main() {
     console.log('Loaded config from env.json')
   }
   const name = env.WORKER_NAME || 'ai-hub-relay'
-  const sh = process.platform === 'win32'
-
   function run(cmd, args, { cwd = worker, input, allowFail, retries = 1 } = {}) {
     let r
     for (let i = 0; i < retries; i++) {
-      r = spawnSync(cmd, args, { cwd, env, encoding: 'utf8', shell: sh, input })
+      r = process.platform === 'win32'
+        ? spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/c', cmd, ...args], { cwd, env, encoding: 'utf8', input })
+        : spawnSync(cmd, args, { cwd, env, encoding: 'utf8', input })
       if (r.status === 0) return r
     }
     if (!allowFail) { console.error(r.stdout, r.stderr); throw new Error(`${cmd} ${args.join(' ')} failed`) }
     return r
   }
   const step = (n, t) => console.log(`\n[${n}/6] ${t}`)
+
+  let cachedClient = null
+  async function getHttpClient() {
+    if (cachedClient) return cachedClient
+    let fetchFn = fetch, dispatcher
+    const proxy = env.HTTPS_PROXY || env.HTTP_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.https_proxy || process.env.http_proxy
+    if (proxy && existsSync(join(worker, 'node_modules', 'undici', 'index.js'))) {
+      const u = await import(pathToFileURL(join(worker, 'node_modules', 'undici', 'index.js')).href)
+      fetchFn = u.fetch; dispatcher = new u.ProxyAgent(proxy)
+    }
+    cachedClient = { fetchFn, dispatcher }
+    return cachedClient
+  }
 
   let headers = null
   if (env.CLOUDFLARE_API_TOKEN) headers = { Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` }
@@ -97,7 +110,11 @@ export async function main() {
   for (const k of ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_EMAIL', 'CLOUDFLARE_API_KEY']) if (!env[k]) delete env[k]
 
   async function cf(path, h = headers) {
-    const res = await fetch(`https://api.cloudflare.com/client/v4${path}`, { headers: { 'Content-Type': 'application/json', ...h } })
+    const { fetchFn, dispatcher } = await getHttpClient()
+    const res = await fetchFn(`https://api.cloudflare.com/client/v4${path}`, {
+      headers: { 'Content-Type': 'application/json', ...h },
+      ...(dispatcher ? { dispatcher } : {}),
+    })
     const j = await res.json()
     if (!j.success) throw new Error(`${path}: ${j.errors?.map(e => e.message).join('; ')}`)
     return j.result
@@ -162,7 +179,7 @@ export async function main() {
 
   step(4, 'deploy worker')
   const dep = run('npx', ['wrangler', 'deploy', '-c', 'wrangler.generated.json'], { retries: 3 })
-  const url = /https:\/\/[^\s]+workers\.dev/.exec(dep.stdout + dep.stderr)?.[0]
+  const url = /https:\/\/[^\s]+workers\.dev/.exec(dep.stdout + dep.stderr)?.[0] || (env.PUBLIC_BASE_URL ? env.PUBLIC_BASE_URL.replace(/\/+$/, '') : undefined)
   console.log('  ', url ?? '(workers.dev URL not detected)')
 
   step(5, 'secrets')
@@ -198,12 +215,7 @@ export async function main() {
   if (url && env.ADMIN_EMAIL && env.ADMIN_PASSWORD && adminToken) {
     await new Promise(r => setTimeout(r, 6000))
     try {
-      let fetchFn = fetch, dispatcher
-      const proxy = env.HTTPS_PROXY || env.HTTP_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || process.env.https_proxy || process.env.http_proxy
-      if (proxy && existsSync(join(worker, 'node_modules', 'undici', 'index.js'))) {
-        const u = await import(pathToFileURL(join(worker, 'node_modules', 'undici', 'index.js')).href)
-        fetchFn = u.fetch; dispatcher = new u.ProxyAgent(proxy)
-      }
+      const { fetchFn, dispatcher } = await getHttpClient()
       const r = await fetchFn(`${url}/api/platform/v1/admin/bootstrap`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' },

@@ -1,4 +1,4 @@
-import { ctEq, sha256Hex } from './protocol'
+import { cmpVersion, ctEq, sha256Hex } from './protocol'
 
 export interface OtaEnv {
   BLOB?: R2Bucket
@@ -56,11 +56,13 @@ export class OtaStore {
     const platform = (url.searchParams.get('platform') ?? '').trim()
     const channel = (url.searchParams.get('channel') ?? 'stable').trim() || 'stable'
     if (!platform) return json(400, { ok: false, error: 'platform is required' })
-    const row = this.sql.exec(
-      'SELECT version,platform,channel,size,sha256 FROM ota_releases WHERE platform=? AND channel=? ORDER BY created DESC LIMIT 1',
+    const rows = this.sql.exec(
+      'SELECT version,platform,channel,size,sha256,created FROM ota_releases WHERE platform=? AND channel=? LIMIT 500',
       platform, channel,
-    ).toArray()[0]
-    if (!row) return json(200, { ok: false, reason: 'no release' })
+    ).toArray()
+    if (!rows.length) return json(200, { ok: false, reason: 'no release' })
+    rows.sort((a, b) => cmpVersion(String(b.version), String(a.version)) || (Number(b.created) - Number(a.created)))
+    const row = rows[0]
     const base = (this.env.PUBLIC_BASE_URL?.trim() || url.origin).replace(/\/+$/, '')
     return json(200, {
       ok: true,

@@ -33,6 +33,8 @@ export default {
     // One global Hub: a tunnel's instanceId only arrives in its first frame and an accepted WebSocket cannot move between DOs.
     const res = await env.HUB.get(env.HUB.idFromName('hub'), opt).fetch(forwarded)
     if (res.status === 101) return res
+    // Keep default encodeBody ('automatic'): env.HUB.get(...).fetch() auto-decompresses res.body
+    // across the DO boundary, so setting encodeBody:'manual' here would corrupt compressed responses.
     const out = new Response(res.body, res)
     for (const [k, v] of Object.entries(SEC)) out.headers.set(k, v)
     return out

@@ -18,11 +18,11 @@ export function Nodes() {
   const load = useCallback(async () => {
     try {
       const o = await api<any>('/overview')
-      setOv(o)
       if (o.role === 'master') {
         const n = await api<{ items: any[] }>('/nodes')
         setNodes(n.items)
       }
+      setOv(o)
     } catch (e: any) {
       toast(e.message, 'error')
     }
@@ -75,7 +75,7 @@ export function Nodes() {
       <Card title="被控端节点联邦 (Master)" subtitle="生成认领码配置到其它中转的 PLATFORM_MASTER_URL + PLATFORM_CLAIM_CODE，即可在此集中监控并远程统管准入模式"
         action={
           <div className="btn-row">
-            <button className="icon-btn" onClick={load} title="刷新"><RefreshCw size={14} /></button>
+            <button className="icon-btn" onClick={load} title="刷新" aria-label="刷新节点列表"><RefreshCw size={14} /></button>
             <button className="btn-primary" onClick={() => { setCreatedClaim(''); setNodeName(''); setCreateOpen(true) }}>
               <Plus size={14} />生成认领码
             </button>
@@ -96,8 +96,8 @@ export function Nodes() {
                 </div>
                 <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as any)} style={{ width: 130 }}>
                   <option value="all">全部状态</option>
-                  <option value="online">隧道在线</option>
-                  <option value="offline">隧道离线</option>
+                  <option value="online">有宿主在线</option>
+                  <option value="offline">暂无宿主</option>
                   <option value="revoked">已移除</option>
                 </select>
               </div>
@@ -114,7 +114,7 @@ export function Nodes() {
                       <b>{n.name || '未报到节点'}</b>
                       {n.revokedAt && <Badge tone="bad">已移除</Badge>}
                     </div>
-                    {n.tunnelOnline ? <Badge tone="ok" dot>隧道在线</Badge> : <Badge>隧道离线</Badge>}
+                    {n.tunnelOnline ? <Badge tone="ok" dot>有宿主在线</Badge> : <Badge>暂无宿主</Badge>}
                   </div>
 
                   <div className="mono-cell"><code>{n.claimCode}</code><CopyBtn value={n.claimCode} label="认领码" /></div>
@@ -130,7 +130,7 @@ export function Nodes() {
                         <button className="btn-ghost btn-sm" onClick={() => setDesired(n, 'open')}>开放</button>
                         <button className="btn-ghost btn-sm" onClick={() => setDesired(n, 'restricted')}>限制</button>
                         <button className="btn-ghost btn-sm" onClick={() => setDesired(n, 'auto')}>交还</button>
-                        <button className="icon-btn danger" title="移除节点" onClick={() => setConfirmAct({ kind: 'revoke', node: n })}><Trash2 size={14} /></button>
+                        <button className="icon-btn danger" title="移除节点" aria-label={`移除节点 ${n.name || n.claimCode}`} onClick={() => setConfirmAct({ kind: 'revoke', node: n })}><Trash2 size={14} /></button>
                       </div>
                     </div>
                   ) : (
@@ -156,15 +156,26 @@ export function Nodes() {
             <button className="btn-primary" disabled={busy} onClick={create}>{busy ? '生成中…' : '生成'}</button>
           </>
         )}>
-        {createdClaim ? (
-          <div className="stack-sm">
-            <p className="muted">请将以下配置写入被控端中转的 <code>env.json</code> 并重新部署：</p>
-            <div className="code-box">
-              <pre>{`"PLATFORM_MASTER_URL": "${location.origin}",\n"PLATFORM_CLAIM_CODE": "${createdClaim}"`}</pre>
-              <CopyBtn value={`"PLATFORM_MASTER_URL": "${location.origin}",\n"PLATFORM_CLAIM_CODE": "${createdClaim}"`} label="配置片段" />
+        {createdClaim ? (() => {
+          const snippet = [
+            `"PLATFORM_MASTER_URL": "${location.origin}",`,
+            `"PLATFORM_CLAIM_CODE": "${createdClaim}",`,
+            `"PLATFORM_MASTER_TOKEN": "", // 若主控端配置了 PLATFORM_MASTER_TOKEN，请填写一致的密钥`,
+            `"PLATFORM_NODE_NAME": "${nodeName.trim() || 'slave-node'}",`,
+            `"PUBLIC_BASE_URL": "https://your-slave-relay.example.com",`,
+            `"PLATFORM_REPORT_INTERVAL_SECONDS": "300"`,
+          ].join('\n')
+          return (
+            <div className="stack-sm">
+              <p className="muted">请将以下配置写入被控端中转的 <code>env.json</code>（或 Wrangler 环境变量）并重新部署：</p>
+              <div className="code-box">
+                <pre>{snippet}</pre>
+                <CopyBtn value={snippet} label="配置片段" />
+              </div>
+              <p className="muted small">提示：被控端按 <code>PLATFORM_REPORT_INTERVAL_SECONDS</code>（默认 300 秒）周期上报，下发准入模式指令可能存在最多 1 个上报周期的同步延迟。</p>
             </div>
-          </div>
-        ) : (
+          )
+        })() : (
           <div className="form">
             <label>节点备注名称（可选）<input placeholder="例如：东京备用节点" value={nodeName} onChange={e => setNodeName(e.target.value)} /></label>
           </div>

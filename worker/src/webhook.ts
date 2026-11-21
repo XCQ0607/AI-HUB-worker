@@ -11,48 +11,116 @@ const enc = new TextEncoder()
 function isPrivateIp4(ip: string): boolean {
   const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(ip)
   if (!m) return false
-  const [a, b] = [Number(m[1]), Number(m[2])]
-  return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127)
-    || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31)
-    || (a === 192 && b === 168) || a >= 224
+  const [a, b, c, d] = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])]
+  if (a > 255 || b > 255 || c > 255 || d > 255) return true
+  return a === 0 || a === 10 || a === 127
+    || (a === 100 && b >= 64 && b <= 127)
+    || (a === 169 && b === 254)
+    || (a === 172 && b >= 16 && b <= 31)
+    || (a === 192 && b === 0 && (c === 0 || c === 2))
+    || (a === 192 && b === 168)
+    || (a === 198 && (b === 18 || b === 19))
+    || (a === 198 && b === 51 && c === 100)
+    || (a === 203 && b === 0 && c === 113)
+    || a >= 224
+}
+
+function parseIp6(host: string): number[] | null {
+  if (!host.includes(':')) return null
+  const clean = host.split('%')[0]
+  const dbl = clean.indexOf('::')
+  if (dbl !== -1 && clean.indexOf('::', dbl + 2) !== -1) return null
+  const parsePart = (part: string): number[] | null => {
+    if (!part) return []
+    const out: number[] = []
+    const segs = part.split(':')
+    for (let i = 0; i < segs.length; i++) {
+      const s = segs[i]
+      if (s.includes('.')) {
+        if (i !== segs.length - 1) return null
+        const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(s)
+        if (!m) return null
+        const octs = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])]
+        if (octs.some(x => x > 255)) return null
+        out.push((octs[0] << 8) | octs[1], (octs[2] << 8) | octs[3])
+      } else {
+        if (!/^[0-9a-f]{1,4}$/.test(s)) return null
+        out.push(parseInt(s, 16))
+      }
+    }
+    return out
+  }
+  if (dbl === -1) {
+    const groups = parsePart(clean)
+    return groups && groups.length === 8 ? groups : null
+  }
+  const left = parsePart(clean.slice(0, dbl))
+  const right = parsePart(clean.slice(dbl + 2))
+  if (!left || !right || left.length + right.length >= 8) return null
+  return [...left, ...new Array(8 - left.length - right.length).fill(0), ...right]
+}
+
+function ip4FromGroups(hi: number, lo: number): string {
+  return `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`
 }
 
 function isPrivateIp6(raw: string): boolean {
   const host = raw.replace(/^\[|\]$/g, '').toLowerCase()
   if (!host.includes(':')) return false
-  if (host === '::' || host === '::1') return true
-  if (host.startsWith('100::')) return true
-  if (host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe8') || host.startsWith('fe9') || host.startsWith('fea') || host.startsWith('feb') || host.startsWith('ff')) return true
-  const m = /^(?:::ffff:(?:0:)?|64:ff9b:(?:1::|:)|::)([^/]+)$/.exec(host)
-  if (m) {
-    const tail = m[1]
-    if (isPrivateIp4(tail)) return true
-    const parts = tail.split(':')
-    if (parts.length === 2 && /^[0-9a-f]{1,4}$/.test(parts[0]) && /^[0-9a-f]{1,4}$/.test(parts[1])) {
-      const hi = parseInt(parts[0], 16), lo = parseInt(parts[1], 16)
-      const ip4 = `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`
-      if (isPrivateIp4(ip4)) return true
-    }
-  }
+  const g = parseIp6(host)
+  if (!g) return true // unparseable IPv6 literal: fail closed
+  const isZero = (from: number, to: number) => { for (let i = from; i < to; i++) if (g[i] !== 0) return false; return true }
+  // :: / ::1
+  if (isZero(0, 7) && (g[7] === 0 || g[7] === 1)) return true
+  // ::ffff:0:0/96 (IPv4-mapped) & ::ffff:0:0:0/96 (IPv4-translated)
+  if (isZero(0, 5) && g[5] === 0xffff) return isPrivateIp4(ip4FromGroups(g[6], g[7]))
+  if (isZero(0, 4) && g[4] === 0xffff && g[5] === 0) return isPrivateIp4(ip4FromGroups(g[6], g[7]))
+  // ::/96 (deprecated IPv4-compatible)
+  if (isZero(0, 6)) return isPrivateIp4(ip4FromGroups(g[6], g[7]))
+  // 64:ff9b::/96 & 64:ff9b:1::/48 (NAT64)
+  if (g[0] === 0x0064 && g[1] === 0xff9b && ((isZero(2, 6) && isPrivateIp4(ip4FromGroups(g[6], g[7]))) || g[2] === 1)) return true
+  // 100::/64 (discard-only)
+  if (g[0] === 0x0100 && isZero(1, 4)) return true
+  // 2001:db8::/32 (documentation)
+  if (g[0] === 0x2001 && g[1] === 0x0db8) return true
+  // 2002::/16 (6to4 embedding IPv4 in g[1], g[2])
+  if (g[0] === 0x2002) return isPrivateIp4(ip4FromGroups(g[1], g[2]))
+  // fc00::/7 (ULA), fe80::/10 (link-local), fec0::/10 (site-local), ff00::/8 (multicast)
+  if ((g[0] & 0xfe00) === 0xfc00) return true
+  if ((g[0] & 0xffc0) === 0xfe80 || (g[0] & 0xffc0) === 0xfec0) return true
+  if ((g[0] & 0xff00) === 0xff00) return true
   return false
 }
 
-/** SSRF guard: HTTPS only, blocks credentials, private/loopback/CGNAT/link-local/ULA/multicast IPs and localhost. */
+/** SSRF guard: HTTPS only, blocks credentials, private/loopback/CGNAT/link-local/ULA/multicast IPs and local hostnames. */
 export function checkWebhookUrl(raw: string): string | null {
   let u: URL
   try { u = new URL(raw.trim()) } catch { return 'URL 格式无效' }
   if (u.protocol !== 'https:') return '仅支持 HTTPS 地址'
   if (u.username || u.password) return 'URL 中不允许包含用户名或密码'
   const h = u.hostname.toLowerCase().replace(/\.+$/, '')
-  if (!h || h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal')) return '不允许内网或本地域名'
+  if (!h || h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal') || h.endsWith('.home.arpa') || h.endsWith('.lan') || h.endsWith('.localdomain')) {
+    return '不允许内网或本地域名'
+  }
   if (isPrivateIp4(h) || isPrivateIp6(h)) return '不允许私网或保留 IP 地址'
+  if (!h.includes(':') && !h.includes('.')) return '不允许单标签内网主机名'
   return null
 }
 
 function redactError(msg: string): string {
   return msg
     .replace(/https?:\/\/[^\s"'<>]+/gi, u => {
-      try { const p = new URL(u); return `${p.origin}${p.pathname.replace(/\/bot[^/]+/i, '/bot***')}` } catch { return '[url]' }
+      try {
+        const p = new URL(u)
+        let path = p.pathname
+          .replace(/\/bot[^/]+/i, '/bot***')
+          .replace(/(\/v2\/hook\/)[^/]+/i, '$1***')
+          .replace(/(\/webhooks\/[^/]+\/)[^/]+/i, '$1***')
+        if (p.hostname.toLowerCase() === 'api.day.app') {
+          path = path.replace(/^\/(?!push(?:\/|$))[^/]+/i, '/***')
+        }
+        return `${p.origin}${path}`
+      } catch { return '[url]' }
     })
     .slice(0, 300)
 }
@@ -240,11 +308,20 @@ export class WebhookService {
     switch (w.provider) {
       case 'bark': {
         const base = w.url.replace(/\/+$/, '')
-        const targetUrl = /\/push$/i.test(base) ? base : `${base}/push`
+        const segs = new URL(base).pathname.split('/').filter(Boolean)
+        const isPushEndpoint = segs.length === 0 || segs[segs.length - 1].toLowerCase() === 'push'
+        const targetUrl = segs.length === 0 ? `${base}/push` : base
+        const payload: Record<string, unknown> = {
+          title: p.title,
+          body: textBody,
+          group: w.target || 'AI-HUB',
+          sound: p.kind === 'failed' ? 'alarm' : 'bell',
+        }
+        if (isPushEndpoint && w.secret) payload.device_key = w.secret
         return {
           url: targetUrl,
           headers,
-          body: JSON.stringify({ title: p.title, body: textBody, group: w.target || 'AI-HUB', sound: p.kind === 'failed' ? 'alarm' : 'bell' }),
+          body: JSON.stringify(payload),
         }
       }
       case 'telegram': {
@@ -357,7 +434,7 @@ export class WebhookService {
       body: String(msg.body || ''),
       instanceId,
       sessionId: String(msg.sessionId ?? ''),
-      kind: String(msg.kind ?? 'completed'),
+      kind: String(msg.pushKind || msg.kind || 'completed'),
     }
     const targets = this.list().filter(w => w.enabled && w.events.includes('push'))
     await Promise.allSettled(targets.map(w => this.sendOne(w, payload)))

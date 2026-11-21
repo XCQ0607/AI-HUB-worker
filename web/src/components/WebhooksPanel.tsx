@@ -4,13 +4,13 @@ import { api, ago, fmtTime, shortId } from '../api'
 import { Badge, BatchBar, Card, ConfirmDialog, Drawer, EmptyState, Modal, Pagination, SortTh, type BadgeTone, type SortState, useToast } from './ui'
 
 const PROVIDERS = [
-  { id: 'bark', name: 'Bark (iOS)', tone: 'bad' as BadgeTone, urlPh: 'https://api.day.app/<your-key>', targetLbl: '分组名 (默认 AI-HUB)' },
-  { id: 'telegram', name: 'Telegram Bot', tone: 'info' as BadgeTone, urlPh: 'https://api.telegram.org/bot<token>/sendMessage', targetLbl: 'Chat ID (必填)' },
-  { id: 'feishu', name: '飞书机器人', tone: 'cyan' as BadgeTone, urlPh: 'https://open.feishu.cn/open-apis/bot/v2/hook/<id>', targetLbl: '备注标签（可选）' },
-  { id: 'dingtalk', name: '钉钉机器人', tone: 'accent' as BadgeTone, urlPh: 'https://oapi.dingtalk.com/robot/send?access_token=<tok>', targetLbl: '备注标签（可选）' },
-  { id: 'wecom', name: '企业微信', tone: 'ok' as BadgeTone, urlPh: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=<key>', targetLbl: '备注标签（可选）' },
-  { id: 'discord', name: 'Discord', tone: 'purple' as BadgeTone, urlPh: 'https://discord.com/api/webhooks/<id>/<token>', targetLbl: 'Bot 显示名 (默认 AI-HUB Relay)' },
-  { id: 'custom', name: '自定义 JSON', tone: 'neutral' as BadgeTone, urlPh: 'https://your-server.example/hook', targetLbl: '备注标签（可选）' },
+  { id: 'bark', name: 'Bark (iOS)', tone: 'bad' as BadgeTone, urlPh: 'https://api.day.app/<your-key>（或自建 https://bark.example/push）', targetLbl: '分组名 (默认 AI-HUB)', usesTarget: true },
+  { id: 'telegram', name: 'Telegram Bot', tone: 'info' as BadgeTone, urlPh: 'https://api.telegram.org/bot<token>/sendMessage', targetLbl: 'Chat ID (必填)', usesTarget: true },
+  { id: 'feishu', name: '飞书机器人', tone: 'cyan' as BadgeTone, urlPh: 'https://open.feishu.cn/open-apis/bot/v2/hook/<id>', targetLbl: '', usesTarget: false },
+  { id: 'dingtalk', name: '钉钉机器人', tone: 'accent' as BadgeTone, urlPh: 'https://oapi.dingtalk.com/robot/send?access_token=<tok>', targetLbl: '', usesTarget: false },
+  { id: 'wecom', name: '企业微信', tone: 'ok' as BadgeTone, urlPh: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=<key>', targetLbl: '', usesTarget: false },
+  { id: 'discord', name: 'Discord', tone: 'purple' as BadgeTone, urlPh: 'https://discord.com/api/webhooks/<id>/<token>', targetLbl: 'Bot 显示名 (默认 AI-HUB Relay)', usesTarget: true },
+  { id: 'custom', name: '自定义 JSON', tone: 'neutral' as BadgeTone, urlPh: 'https://your-server.example/hook', targetLbl: '', usesTarget: false },
 ]
 
 const EVENTS = [
@@ -25,7 +25,9 @@ const providerMeta = (id: string) => PROVIDERS.find(p => p.id === id) ?? PROVIDE
 export function WebhooksPanel() {
   const toast = useToast()
   const [items, setItems] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
   const [alerts, setAlerts] = useState({ disconnect: true, bruteforce: true, outdated: true, cooldownSec: 60 })
+  const [cooldownInput, setCooldownInput] = useState('60')
   const [q, setQ] = useState('')
   const [provFilter, setProvFilter] = useState('all')
   const [sort, setSort] = useState<SortState>({ field: 'created', dir: 'desc' })
@@ -49,8 +51,11 @@ export function WebhooksPanel() {
     try {
       const r = await api<any>('/webhooks')
       setItems(r.items ?? [])
-      if (r.alerts) setAlerts(r.alerts)
-    } catch (e: any) { toast(e.message, 'error') }
+      if (r.alerts) {
+        setAlerts(r.alerts)
+        setCooldownInput(String(r.alerts.cooldownSec ?? 60))
+      }
+    } catch (e: any) { toast(e.message, 'error') } finally { setLoading(false) }
   }, [toast])
 
   useEffect(() => { load() }, [load])
@@ -63,10 +68,11 @@ export function WebhooksPanel() {
 
   const saveAlerts = async (next: typeof alerts) => {
     const prev = alerts
-    const clean = { ...next, cooldownSec: Math.max(10, Math.min(3600, Number(next.cooldownSec) || 60)) }
+    const clean = { ...next, cooldownSec: Math.max(10, Math.min(3600, Math.floor(Number(next.cooldownSec) || 60))) }
     setAlerts(clean)
+    setCooldownInput(String(clean.cooldownSec))
     try { await api('/webhooks/alerts', { method: 'PUT', body: clean }); toast('告警策略已保存', 'success') }
-    catch (e: any) { setAlerts(prev); toast(e.message, 'error') }
+    catch (e: any) { setAlerts(prev); setCooldownInput(String(prev.cooldownSec)); toast(e.message, 'error') }
   }
 
   const openCreate = () => {
@@ -136,8 +142,8 @@ export function WebhooksPanel() {
           <label className="chk-row"><input type="checkbox" checked={alerts.bruteforce} onChange={e => saveAlerts({ ...alerts, bruteforce: e.target.checked })} />登录爆破限流告警</label>
           <div className="btn-row">
             <span className="muted small">冷却(秒)</span>
-            <input type="number" min={10} max={3600} value={alerts.cooldownSec} onChange={e => setAlerts({ ...alerts, cooldownSec: +e.target.value })} style={{ width: 82 }} />
-            <button className="btn-ghost btn-sm" onClick={() => saveAlerts(alerts)}><Check size={13} />应用</button>
+            <input type="number" min={10} max={3600} aria-label="告警冷却秒数" value={cooldownInput} onChange={e => setCooldownInput(e.target.value)} style={{ width: 82 }} />
+            <button className="btn-ghost btn-sm" onClick={() => saveAlerts({ ...alerts, cooldownSec: Number(cooldownInput) || 60 })}><Check size={13} />应用</button>
           </div>
         </div>
       </Card>
@@ -166,14 +172,16 @@ export function WebhooksPanel() {
           <button className="btn-ghost btn-sm danger" onClick={() => setBatchConfirm('delete')}>批量删除</button>
         </BatchBar>
 
-        {paged.length === 0 ? (
+        {loading ? (
+          <p className="muted pad">读取 Webhook 渠道…</p>
+        ) : paged.length === 0 ? (
           <EmptyState icon={<Webhook size={24} />}
             title={items.length === 0 ? '尚未配置 Webhook 推送渠道' : '没有匹配的 Webhook 渠道'}
             hint={items.length === 0 ? '自建用户无需官方 iOS .p8 密钥，配好 Bark 或 Telegram 即可实现锁屏任务提醒' : '请调整筛选条件'} />
         ) : (
           <div className="table">
             <div className="tr t-wh th">
-              <input type="checkbox" checked={paged.length > 0 && paged.every(w => selectedIds.has(w.id))}
+              <input type="checkbox" aria-label="全选当前页 Webhook" checked={paged.length > 0 && paged.every(w => selectedIds.has(w.id))}
                 onChange={e => setSelectedIds(e.target.checked ? new Set(paged.map(w => w.id)) : new Set())} />
               <SortTh label="名称" field="name" sort={sort} onSort={setSort} />
               <SortTh label="渠道" field="provider" sort={sort} onSort={setSort} />
@@ -187,7 +195,7 @@ export function WebhooksPanel() {
               return (
                 <div className="tr t-wh" key={w.id}>
                   <label className="chk-row" data-label="选择">
-                    <input type="checkbox" checked={selectedIds.has(w.id)} onChange={e => {
+                    <input type="checkbox" aria-label={`选择渠道 ${w.name}`} checked={selectedIds.has(w.id)} onChange={e => {
                       const n = new Set(selectedIds); e.target.checked ? n.add(w.id) : n.delete(w.id); setSelectedIds(n)
                     }} />
                   </label>
@@ -197,9 +205,9 @@ export function WebhooksPanel() {
                   <span data-label="订阅"><Badge>{(w.events ?? []).length} 项</Badge></span>
                   <span data-label="状态">{w.enabled ? <Badge tone="ok" dot>启用</Badge> : <Badge>停用</Badge>}</span>
                   <span className="actions">
-                    <button className="icon-btn" title="发送测试" onClick={() => testSend(w)}><Send size={14} /></button>
-                    <button className="icon-btn" title="编辑" onClick={() => openEdit(w)}><Edit3 size={14} /></button>
-                    <button className="icon-btn danger" title="删除" onClick={() => setDelTarget(w)}><Trash2 size={14} /></button>
+                    <button className="icon-btn" title="发送测试" aria-label={`测试 ${w.name}`} onClick={() => testSend(w)}><Send size={14} /></button>
+                    <button className="icon-btn" title="编辑" aria-label={`编辑 ${w.name}`} onClick={() => openEdit(w)}><Edit3 size={14} /></button>
+                    <button className="icon-btn danger" title="删除" aria-label={`删除 ${w.name}`} onClick={() => setDelTarget(w)}><Trash2 size={14} /></button>
                   </span>
                 </div>
               )
@@ -225,12 +233,24 @@ export function WebhooksPanel() {
             </label>
           </div>
           <label>HTTPS Webhook URL<input placeholder={meta.urlPh} value={form.url} onChange={e => setForm({ ...form, url: e.target.value })} /></label>
-          <div className="form-2">
-            <label>{meta.targetLbl}<input value={form.target} onChange={e => setForm({ ...form, target: e.target.value })} placeholder={form.provider === 'telegram' ? '-100123456' : ''} /></label>
+          {form.provider === 'bark' && (
+            <p className="muted small">支持官方设备地址 <code>https://api.day.app/&lt;your-key&gt;</code>，或自建 Bark 的 <code>/push</code> 端点（需在服务端或 URL 携带对应设备 Key）。</p>
+          )}
+          <div className={meta.usesTarget ? 'form-2' : ''}>
+            {meta.usesTarget && (
+              <label>{meta.targetLbl}<input value={form.target} onChange={e => setForm({ ...form, target: e.target.value })} placeholder={form.provider === 'telegram' ? '-100123456' : ''} /></label>
+            )}
             <label>签名 Secret（飞书/钉钉/自定义可选）
               <input type="password" disabled={form.clearSecret} value={form.secret} onChange={e => setForm({ ...form, secret: e.target.value })} placeholder={editingId && form.secretSet ? '已设置（留空保留）' : '可选'} />
             </label>
           </div>
+          {form.provider === 'custom' && (
+            <div className="banner">
+              <span className="small">
+                自定义 Webhook 以 <code>POST JSON</code> 发送 <code>{'{ event, title, body, kind?, instanceId?, timestamp }'}</code>；若填写 Secret，将附带请求头 <code>x-aihub-signature: sha256=&lt;hex&gt;</code>（HMAC-SHA256 原始请求体）。
+              </span>
+            </div>
+          )}
           {editingId && form.secretSet && (
             <label className="chk-row"><input type="checkbox" checked={form.clearSecret} onChange={e => setForm({ ...form, clearSecret: e.target.checked, secret: '' })} />清除已保存的 Secret</label>
           )}

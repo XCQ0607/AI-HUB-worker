@@ -49,7 +49,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           <div key={t.id} className={`toast toast-${t.kind}`}>
             {t.kind === 'success' ? <CheckCircle2 size={16} /> : t.kind === 'error' ? <AlertCircle size={16} /> : <Info size={16} />}
             <span>{t.text}</span>
-            <button className="icon-btn" onClick={() => setItems(p => p.filter(x => x.id !== t.id))}><X size={13} /></button>
+            <button className="icon-btn" aria-label="关闭提示" onClick={() => setItems(p => p.filter(x => x.id !== t.id))}><X size={13} /></button>
           </div>
         ))}
       </div>
@@ -120,7 +120,7 @@ export function Drawer({ open, title, subtitle, onClose, children }: {
             <h3>{title}</h3>
             {subtitle && <small className="muted">{subtitle}</small>}
           </div>
-          <button className="icon-btn" onClick={onClose}><X size={16} /></button>
+          <button className="icon-btn" aria-label="关闭抽屉" onClick={onClose}><X size={16} /></button>
         </div>
         <div className="drawer-bd">{children}</div>
       </aside>
@@ -181,7 +181,13 @@ export function StatCard({ label, value, hint, icon, tone, onClick }: {
   label: string; value: ReactNode; hint?: string; icon?: ReactNode; tone?: 'ok' | 'warn' | 'accent' | 'purple' | 'cyan'; onClick?: () => void
 }) {
   return (
-    <div className={`stat ${tone ? 'stat-' + tone : ''} ${onClick ? 'clickable' : ''}`} onClick={onClick}>
+    <div
+      className={`stat ${tone ? 'stat-' + tone : ''} ${onClick ? 'clickable' : ''}`}
+      onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick() } } : undefined}
+    >
       <div className="stat-top"><span>{label}</span>{icon}</div>
       <b>{value}</b>
       {hint && <small>{hint}</small>}
@@ -214,7 +220,7 @@ export function CopyBtn({ value, label, text }: { value: string; label?: string;
     }
   }
   return (
-    <button type="button" className={text ? 'btn-ghost btn-sm' : 'icon-btn'} title="复制" onClick={run}>
+    <button type="button" className={text ? 'btn-ghost btn-sm' : 'icon-btn'} title="复制" aria-label={label ? `复制${label}` : '复制'} onClick={run}>
       {copied ? <Check size={14} className="ok" /> : <Copy size={14} />}
       {text && <span>{copied ? '已复制' : text}</span>}
     </button>

@@ -80,7 +80,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          PREV="$(git describe --tags --abbrev=0 "${{ github.sha }}^0" 2>/dev/null || true)"
+          PREV="$(git describe --tags --abbrev=0 "${{ github.sha }}^" 2>/dev/null || true)"
           LIST=""
           if [ -n "$PREV" ]; then
             echo "Previous tag: $PREV"

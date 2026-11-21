@@ -62,8 +62,11 @@ export const normLicense = (c: string) => c.replace(/[—–]/g, '-').trim().toU
 const safeDec = (s: string) => { try { return decodeURIComponent(s) } catch { return null } }
 const bearerToken = (req: Request) => /^Bearer\s+(.+)$/i.exec((req.headers.get('authorization') ?? '').trim())?.[1]?.trim() ?? ''
 export const normClaim = (c: string) => {
-  const s = c.replace(/[—–]/g, '-').trim().toUpperCase()
-  return s.startsWith('NODE-') ? s : `NODE-${s}`
+  const raw = c.replace(/[—–−]/g, '-').replace(/\s+/g, '').trim().toUpperCase()
+  const body = raw.startsWith('NODE-') ? raw.slice(5) : (raw.startsWith('NODE') && raw.length === 12 ? raw.slice(4) : raw)
+  const alnum = body.replace(/-/g, '')
+  if (/^[A-Z0-9]{8}$/.test(alnum)) return `NODE-${alnum.slice(0, 4)}-${alnum.slice(4)}`
+  return raw.startsWith('NODE-') ? raw : `NODE-${body}`
 }
 
 const ALPHA = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
@@ -72,8 +75,6 @@ const genCode = () => `AIHUB-${seg(4)}-${seg(4)}-${seg(4)}`
 const genClaim = () => `NODE-${seg(4)}-${seg(4)}`
 
 export class Admin {
-  private tries = new Map<string, { n: number; t: number }>()
-  private diagSecret = crypto.randomUUID()
   private metricBuf = { reqs: 0, bytesIn: 0, bytesOut: 0, mirrorHits: 0, lastFlush: 0 }
   private instBuf = new Map<string, { reqs: number; bytesIn: number; bytesOut: number }>()
 
@@ -91,10 +92,12 @@ export class Admin {
       CREATE TABLE IF NOT EXISTS audit_logs(id INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL DEFAULT '', detail TEXT NOT NULL DEFAULT '', created INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS monitor_tokens(id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT UNIQUE NOT NULL, prefix TEXT NOT NULL, created INTEGER NOT NULL, last_used INTEGER);
       CREATE TABLE IF NOT EXISTS metrics_hourly(hour INTEGER PRIMARY KEY, reqs INTEGER NOT NULL DEFAULT 0, bytes_in INTEGER NOT NULL DEFAULT 0, bytes_out INTEGER NOT NULL DEFAULT 0, mirror_hits INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS rate_limits(k TEXT PRIMARY KEY, n INTEGER NOT NULL, t INTEGER NOT NULL);
     `)
     try { sql.exec('ALTER TABLE licenses ADD COLUMN device_limit INTEGER NOT NULL DEFAULT 1') } catch { /* already exists */ }
     try { sql.exec('ALTER TABLE licenses ADD COLUMN expires_at INTEGER') } catch { /* already exists */ }
     try { sql.exec('ALTER TABLE admins ADD COLUMN totp_secret TEXT') } catch { /* already exists */ }
+    try { sql.exec('ALTER TABLE admins ADD COLUMN totp_pending_secret TEXT') } catch { /* already exists */ }
     try { sql.exec('ALTER TABLE admins ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0') } catch { /* already exists */ }
     try { sql.exec('ALTER TABLE admins ADD COLUMN totp_recovery TEXT') } catch { /* already exists */ }
     try { sql.exec('ALTER TABLE admins ADD COLUMN totp_last_step INTEGER') } catch { /* already exists */ }
@@ -144,18 +147,24 @@ export class Admin {
 
   private rateLimit(ip: string, bucket: string, limit: number): boolean {
     const key = `${bucket}:${ip}`, now = Date.now()
-    if (this.tries.size > 1000) {
-      for (const [k, v] of this.tries) if (now - v.t >= 60_000) this.tries.delete(k)
+    this.sql.exec('DELETE FROM rate_limits WHERE t <= ?', now - 60_000)
+    const row = this.sql.exec('SELECT n,t FROM rate_limits WHERE k=?', key).toArray()[0]
+    if (row && now - Number(row.t) < 60_000) {
+      if (Number(row.n) >= limit) return false
+      this.sql.exec('UPDATE rate_limits SET n=n+1 WHERE k=?', key)
+      return true
     }
-    const t = this.tries.get(key)
-    if (t && now - t.t < 60_000 && t.n >= limit) return false
-    this.tries.set(key, { n: t && now - t.t < 60_000 ? t.n + 1 : 1, t: t && now - t.t < 60_000 ? t.t : now })
+    this.sql.exec('INSERT INTO rate_limits(k,n,t) VALUES(?,1,?) ON CONFLICT(k) DO UPDATE SET n=1, t=excluded.t', key, now)
     return true
   }
 
   private checkLimit(ip: string, bucket: string, limit: number): boolean {
-    const t = this.tries.get(`${bucket}:${ip}`)
-    return !t || Date.now() - t.t >= 60_000 || t.n < limit
+    const row = this.sql.exec('SELECT n,t FROM rate_limits WHERE k=?', `${bucket}:${ip}`).toArray()[0]
+    return !row || Date.now() - Number(row.t) >= 60_000 || Number(row.n) < limit
+  }
+
+  private clearLimit(ip: string, bucket: string) {
+    this.sql.exec('DELETE FROM rate_limits WHERE k=?', `${bucket}:${ip}`)
   }
 
   // ---- admission & devices ----
@@ -221,9 +230,14 @@ export class Admin {
     else this.sql.exec('INSERT INTO migrations(id,dest,expires) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET dest=excluded.dest, expires=excluded.expires', id, dest, Date.now() + ttlDays * 86400_000)
   }
 
+  private getDiagSecret(): string {
+    let s = this.setting('diag_secret')
+    if (!s) { s = crypto.randomUUID(); this.setSetting('diag_secret', s) }
+    return s
+  }
   async makeDiagTicket(): Promise<string> {
     const ts = String(Date.now())
-    const sig = await sha256Hex(`${this.diagSecret}:${ts}`)
+    const sig = await sha256Hex(`${this.getDiagSecret()}:${ts}`)
     return `${ts}.${sig.slice(0, 24)}`
   }
   async verifyDiagTicket(tok: string): Promise<boolean> {
@@ -231,7 +245,7 @@ export class Admin {
     if (!ts || !sig) return false
     const age = Date.now() - Number(ts)
     if (!Number.isFinite(age) || age < 0 || age > 60_000) return false
-    const expected = (await sha256Hex(`${this.diagSecret}:${ts}`)).slice(0, 24)
+    const expected = (await sha256Hex(`${this.getDiagSecret()}:${ts}`)).slice(0, 24)
     return ctEq(sig, expected)
   }
 
@@ -244,7 +258,13 @@ export class Admin {
   }
   private async who(req: Request): Promise<string | null> {
     const bearer = bearerToken(req)
-    if (this.env.ADMIN_TOKEN && bearer && ctEq(bearer, this.env.ADMIN_TOKEN)) return '(admin-token)'
+    if (bearer && this.env.ADMIN_TOKEN) {
+      const ip = req.headers.get('cf-connecting-ip') ?? 'unknown'
+      if (this.checkLimit(ip, 'admin_tok', 10)) {
+        if (ctEq(bearer, this.env.ADMIN_TOKEN)) return '(admin-token)'
+        this.rateLimit(ip, 'admin_tok', 10)
+      }
+    }
     const m = new RegExp(`(?:^|;\\s*)${COOKIE}=([^;]+)`).exec(req.headers.get('cookie') ?? '')
     if (!m) return null
     const r = this.sql.exec('SELECT email,expires FROM sessions WHERE th=?', await sha256Hex(m[1])).toArray()[0]
@@ -257,9 +277,14 @@ export class Admin {
     const url = new URL(req.url)
     const raw = bearerToken(req) || (url.searchParams.get('token') ?? '').trim()
     if (!raw) return false
+    const ip = req.headers.get('cf-connecting-ip') ?? 'unknown'
+    if (!this.checkLimit(ip, 'mon_tok', 30)) return false
     const hash = await sha256Hex(raw)
     const row = this.sql.exec('SELECT id FROM monitor_tokens WHERE token_hash=?', hash).toArray()[0]
-    if (!row) return false
+    if (!row) {
+      this.rateLimit(ip, 'mon_tok', 30)
+      return false
+    }
     this.sql.exec('UPDATE monitor_tokens SET last_used=? WHERE id=?', Date.now(), row.id)
     return true
   }
@@ -357,7 +382,7 @@ export class Admin {
           return json(401, { error: '两步验证码或恢复码错误' })
         }
       }
-      this.tries.delete(`login_fail:${ip}`)
+      this.clearLimit(ip, 'login_fail')
       const token = await this.createSession(email)
       const sec = url.protocol === 'https:' ? '; Secure' : ''
       this.audit(email, 'auth.login', email, ip)
@@ -365,12 +390,19 @@ export class Admin {
     }
 
     if (route === '/admin/bootstrap' && method === 'POST') {
+      if (!this.checkLimit(ip, 'bootstrap', 10)) return json(429, { error: '尝试过于频繁，请稍后再试' })
       const bearer = bearerToken(req)
-      if (!this.env.ADMIN_TOKEN || !bearer || !ctEq(bearer, this.env.ADMIN_TOKEN)) return json(401, { error: 'unauthorized' })
+      if (!this.env.ADMIN_TOKEN || !bearer || !ctEq(bearer, this.env.ADMIN_TOKEN)) {
+        this.rateLimit(ip, 'bootstrap', 10)
+        return json(401, { error: 'unauthorized' })
+      }
       const b = await body()
-      if (!/^\S+@\S+\.\S+$/.test(String(b.email ?? '')) || String(b.password ?? '').length < 12) return json(400, { error: '邮箱无效或密码少于 12 位' })
-      await this.upsertAdmin(b.email, b.password)
-      this.audit('(bootstrap)', 'admin.bootstrap', String(b.email))
+      const email = typeof b.email === 'string' ? b.email.trim() : ''
+      const pw = typeof b.password === 'string' ? b.password : ''
+      if (!/^\S+@\S+\.\S+$/.test(email) || pw.length < 12) return json(400, { error: '邮箱无效或密码少于 12 位' })
+      this.clearLimit(ip, 'bootstrap')
+      await this.upsertAdmin(email, pw)
+      this.audit('(bootstrap)', 'admin.bootstrap', email)
       return json(200, { ok: true })
     }
 
@@ -409,6 +441,7 @@ export class Admin {
     }
 
     if (route === '/nodes/report' && method === 'POST') {
+      if (!this.rateLimit(ip, 'node_report', 60)) return json(429, { ok: false, error: 'too many requests' })
       const masterTok = this.env.PLATFORM_MASTER_TOKEN?.trim()
       if (masterTok) {
         const provided = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim()
@@ -422,6 +455,7 @@ export class Admin {
       if (node.revoked_at) return json(403, { ok: false, error: 'this node was removed by the master' })
       const b = await body()
       const now = Date.now()
+      const statusRaw = typeof b.statusJson === 'string' ? b.statusJson : (typeof b.status_json === 'string' ? b.status_json : JSON.stringify(b))
       this.sql.exec(`UPDATE nodes SET name=?,public_url=?,admission_mode=?,license_count=?,device_count=?,tunnel_online=?,status_json=?,last_seen=? WHERE id=?`,
         String(b.name ?? '').slice(0, 120),
         String(b.publicUrl ?? '').slice(0, 256),
@@ -429,10 +463,11 @@ export class Admin {
         Math.max(0, Number(b.licenseCount) || 0),
         Math.max(0, Number(b.deviceCount) || 0),
         b.tunnelOnline ? 1 : 0,
-        typeof b.statusJson === 'string' ? b.statusJson.slice(0, 4000) : JSON.stringify(b).slice(0, 4000),
+        statusRaw.slice(0, 4000),
         now, node.id)
       const desired = String(node.desired_mode ?? '')
-      return json(200, { ok: true, admissionMode: desired === 'open' || desired === 'restricted' ? desired : undefined })
+      const managed = desired === 'open' || desired === 'restricted'
+      return json(200, { ok: true, admissionMode: managed ? desired : null, managed })
     }
 
     const me = await this.who(req)
@@ -453,6 +488,7 @@ export class Admin {
         colo: req.headers.get('x-aihub-colo') || 'LOCAL',
         country: req.headers.get('x-aihub-country') || '',
         role: this.isSlave ? 'slave' : 'master',
+        claimCodeSet: Boolean(this.env.PLATFORM_CLAIM_CODE?.trim()),
         masterUrl: this.env.PLATFORM_MASTER_URL ?? '',
         masterLastReportAt: Number(this.setting('master_last_report_at', '0')) || null,
         masterLastError: this.setting('master_last_error'),
@@ -528,9 +564,12 @@ export class Admin {
     }
     if (route === '/licenses' && method === 'POST') {
       const b = await body()
-      const count = Math.min(Math.max(Number(b.count) || 1, 1), 100)
-      const limit = Math.min(Math.max(Number(b.deviceLimit) || 1, 1), 50)
-      const days = Number(b.expiresInDays) || 0
+      const rawCount = Number(b.count ?? 1)
+      const count = Number.isFinite(rawCount) ? Math.min(Math.max(Math.floor(rawCount), 1), 100) : 1
+      const rawLimit = Number(b.deviceLimit ?? 1)
+      const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.floor(rawLimit), 1), 50) : 1
+      const rawDays = Number(b.expiresInDays ?? 0)
+      const days = Number.isFinite(rawDays) && rawDays > 0 ? Math.min(Math.floor(rawDays), 3650) : 0
       const expiresAt = days > 0 ? Date.now() + days * 86400_000 : null
       const note = String(b.note ?? '').slice(0, 200)
       const custom = b.code !== undefined ? normLicense(String(b.code)) : ''
@@ -556,7 +595,11 @@ export class Admin {
         const txt = rows.map(r => `${r.code}\t${r.status}\t${r.expires_at ? new Date(Number(r.expires_at)).toISOString() : 'permanent'}\t${r.note ?? ''}`).join('\n')
         return new Response(txt, { headers: { 'content-type': 'text/plain; charset=utf-8', 'content-disposition': 'attachment; filename="ai-hub-licenses.txt"' } })
       }
-      const esc = (s: unknown) => `"${String(s ?? '').replace(/"/g, '""')}"`
+      const esc = (s: unknown) => {
+        let v = String(s ?? '')
+        if (/^[=+\-@\t\r]/.test(v)) v = `'${v}`
+        return `"${v.replace(/"/g, '""')}"`
+      }
       const csv = ['code,status,device_limit,expires_at,note,created', ...rows.map(r => [
         esc(r.code), esc(r.status), r.device_limit, esc(r.expires_at ? new Date(Number(r.expires_at)).toISOString() : 'permanent'), esc(r.note), esc(new Date(Number(r.created)).toISOString()),
       ].join(','))].join('\n')
@@ -572,8 +615,9 @@ export class Admin {
         else if (action === 'activate' || action === 'revoke') this.sql.exec('UPDATE licenses SET status=? WHERE id=?', action === 'activate' ? 'active' : 'revoked', id)
         else if (action === 'unbind') { this.sql.exec('DELETE FROM license_devices WHERE license_id=?', id); this.sql.exec('UPDATE licenses SET bound=NULL WHERE id=?', id) }
         else if (action === 'renew') {
-          const days = Number(b.days)
-          if (!Number.isFinite(days) || days < 0) return json(400, { error: '续期天数无效' })
+          const rawDays = Number(b.days)
+          if (!Number.isFinite(rawDays) || rawDays < 0 || rawDays > 3650) return json(400, { error: '续期天数无效 (0-3650)' })
+          const days = Math.floor(rawDays)
           if (days === 0) this.sql.exec('UPDATE licenses SET expires_at=NULL WHERE id=?', id)
           else {
             const r = this.sql.exec('SELECT expires_at FROM licenses WHERE id=?', id).toArray()[0]
@@ -590,8 +634,9 @@ export class Admin {
       const id = safeDec(m[1])
       if (!id) return json(400, { error: '参数无效' })
       const b = await body()
-      const days = Number(b.days)
-      if (!Number.isFinite(days) || days < 0) return json(400, { error: '续期天数无效' })
+      const rawDays = Number(b.days)
+      if (!Number.isFinite(rawDays) || rawDays < 0 || rawDays > 3650) return json(400, { error: '续期天数无效 (0-3650)' })
+      const days = Math.floor(rawDays)
       if (days === 0) this.sql.exec('UPDATE licenses SET expires_at=NULL WHERE id=?', id)
       else {
         const r = this.sql.exec('SELECT expires_at FROM licenses WHERE id=?', id).toArray()[0]
@@ -952,10 +997,11 @@ export class Admin {
           this.rateLimit(ip, 'totp_setup', 10)
           return json(400, { error: '当前动态验证码或恢复码不正确' })
         }
-        this.tries.delete(`totp_setup:${ip}`)
+        this.clearLimit(ip, 'totp_setup')
       }
       const secret = genTotpSecret()
-      this.sql.exec('UPDATE admins SET totp_secret=?, totp_enabled=0, totp_last_step=NULL WHERE email=?', secret, me)
+      // Store pending secret separately so cancelling setup/rebind never disables existing 2FA.
+      this.sql.exec('UPDATE admins SET totp_pending_secret=? WHERE email=?', secret, me)
       const uri = buildOtpAuthUri(me, secret, 'AI-HUB')
       return json(200, { secret, uri, qrSvg: renderQrSvg(uri) })
     }
@@ -963,18 +1009,21 @@ export class Admin {
       if (me === '(admin-token)') return json(400, { error: '需邮箱账号登录' })
       if (!this.checkLimit(ip, 'totp_enable', 10)) return json(429, { error: '尝试过于频繁，请稍后再试' })
       const b = await body()
-      const a = this.sql.exec('SELECT totp_secret,totp_last_step FROM admins WHERE email=?', me).toArray()[0]
-      if (!a?.totp_secret) return json(400, { error: '请先生成密钥' })
-      const lastStep = a.totp_last_step != null ? Number(a.totp_last_step) : null
-      const matchedStep = await verifyTotpStep(String(a.totp_secret), String(b.code ?? ''), lastStep)
+      const a = this.sql.exec('SELECT totp_pending_secret,totp_secret,totp_enabled FROM admins WHERE email=?', me).toArray()[0]
+      const pending = a?.totp_pending_secret ? String(a.totp_pending_secret) : (Number(a?.totp_enabled ?? 0) === 0 && a?.totp_secret ? String(a.totp_secret) : '')
+      if (!pending) return json(400, { error: '请先生成密钥' })
+      const matchedStep = await verifyTotpStep(pending, String(b.code ?? ''), null)
       if (matchedStep === null) {
         this.rateLimit(ip, 'totp_enable', 10)
         return json(400, { error: '6 位动态验证码不正确' })
       }
-      this.tries.delete(`totp_enable:${ip}`)
+      this.clearLimit(ip, 'totp_enable')
       const recoveryCodes = genRecoveryCodes(8)
       const hashes = await Promise.all(recoveryCodes.map(c => sha256Hex(c)))
-      this.sql.exec('UPDATE admins SET totp_enabled=1, totp_recovery=?, totp_last_step=? WHERE email=?', JSON.stringify(hashes), matchedStep, me)
+      this.sql.exec(
+        'UPDATE admins SET totp_secret=?, totp_pending_secret=NULL, totp_enabled=1, totp_recovery=?, totp_last_step=? WHERE email=?',
+        pending, JSON.stringify(hashes), matchedStep, me,
+      )
       this.audit(me, 'auth.totp.enable', me)
       return json(200, { ok: true, recoveryCodes })
     }
@@ -1004,8 +1053,8 @@ export class Admin {
           return json(400, { error: '动态验证码或恢复码不正确' })
         }
       }
-      this.tries.delete(`totp_disable:${ip}`)
-      this.sql.exec('UPDATE admins SET totp_enabled=0, totp_secret=NULL, totp_recovery=NULL, totp_last_step=NULL WHERE email=?', me)
+      this.clearLimit(ip, 'totp_disable')
+      this.sql.exec('UPDATE admins SET totp_enabled=0, totp_secret=NULL, totp_pending_secret=NULL, totp_recovery=NULL, totp_last_step=NULL WHERE email=?', me)
       this.audit(me, 'auth.totp.disable', me)
       return json(200, { ok: true })
     }
@@ -1024,6 +1073,7 @@ export class Admin {
         r2Enabled: !!this.env.BLOB,
         otaTokenSet: !!this.env.PLATFORM_OTA_CONTROL_TOKEN,
         role: this.isSlave ? 'slave' : 'master',
+        claimCodeSet: Boolean(this.env.PLATFORM_CLAIM_CODE?.trim()),
         masterUrl: this.env.PLATFORM_MASTER_URL ?? '',
         modeControlled: this.isModeControlled,
       })
@@ -1036,8 +1086,9 @@ export class Admin {
         this.setSetting('admission_mode', b.mode); this.audit(me, 'settings.mode', b.mode)
       }
       if (b.minVersion !== undefined) {
-        if (b.minVersion && !/^v?\d+\.\d+\.\d+$/.test(b.minVersion)) return json(400, { error: '版本格式应为 x.y.z' })
-        this.setSetting('min_plugin_version', b.minVersion); this.audit(me, 'settings.minVersion', b.minVersion || '(unlimited)')
+        const mv = typeof b.minVersion === 'string' ? b.minVersion.trim() : String(b.minVersion ?? '').trim()
+        if (mv && !/^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(mv)) return json(400, { error: '版本格式应为 x.y.z' })
+        this.setSetting('min_plugin_version', mv); this.audit(me, 'settings.minVersion', mv || '(unlimited)')
       }
       if (b.mirrorEnabled !== undefined) {
         const v = b.mirrorEnabled ? '1' : '0'
@@ -1067,7 +1118,25 @@ export class Admin {
     }
     if (route === '/admin/password' && method === 'POST') {
       const b = await body()
-      if (me === '(admin-token)' || String(b.password ?? '').length < 12) return json(400, { error: '需用账号登录且新密码至少 12 位' })
+      if (typeof b.password !== 'string' || b.password.length < 12) return json(400, { error: '新密码至少 12 位' })
+      if (me === '(admin-token)') {
+        const targetEmail = typeof b.email === 'string' ? b.email.trim().toLowerCase() : ''
+        if (!/^\S+@\S+\.\S+$/.test(targetEmail)) return json(400, { error: '使用 ADMIN_TOKEN 修改密码时需提供有效 email' })
+        await this.upsertAdmin(targetEmail, b.password)
+        this.sql.exec('DELETE FROM sessions WHERE email=?', targetEmail)
+        this.audit(me, 'admin.password', targetEmail)
+        return json(200, { ok: true })
+      }
+      if (!this.checkLimit(ip, 'pw_change', 10)) return json(429, { error: '尝试过于频繁，请稍后再试' })
+      if (typeof b.currentPassword !== 'string' || !b.currentPassword) return json(400, { error: '请输入当前密码' })
+      const a = this.sql.exec('SELECT salt,hash FROM admins WHERE email=?', me).toArray()[0]
+      if (!a) return json(404, { error: '账号不存在' })
+      const curHash = await pbkdf2(b.currentPassword, unb64(String(a.salt)))
+      if (!ctEq(curHash, String(a.hash))) {
+        this.rateLimit(ip, 'pw_change', 10)
+        return json(401, { error: '当前密码错误' })
+      }
+      this.clearLimit(ip, 'pw_change')
       await this.upsertAdmin(me, b.password)
       this.sql.exec('DELETE FROM sessions WHERE email=?', me)
       this.audit(me, 'admin.password', me)

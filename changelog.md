@@ -2,6 +2,13 @@
 
 All notable changes to **AI-HUB-worker** (`XCQ0607/AI-HUB-worker`) will be documented in this file.
 
+## Unreleased
+
+### 安全加固、上游协议对齐与工程优化
+- **Worker 核心与安全修复**：修复 Durable Object (`hub.ts`) 压缩响应流透传 `encodeBody: 'manual'` 缺失导致的二次压缩（外层 Worker 保持 `automatic` 匹配 `DO.fetch()` 自动解压边界）；修复手机 WebSocket 帧跨实例校验与 `cancel()` 挂起 Promise；修复 `0x1B pushSend` 读取 `pushKind`、Master 交还 Slave 权限解锁、OTA `/latest` SemVer 排序、R2 Blob 跨实例键隔离/批量删除/TTL 校验、`0x1C migrate` 校验及 Bark/SSRF/2FA 鉴权边界问题。
+- **前端控制台体验与文案优化**：修正无头配置引导、节点与存储页状态文案、审计日志/激活码导出与筛选体验，完善空态加载、响应式表格及无障碍交互细节。
+- **文档、模板与 CI 卫生**：移除 `env-template.json` 中的个人邮箱并补全可选环境变量；加固 `.gitignore`（覆盖 `.env*`、`.dev.vars*`、`*.tsbuildinfo`、`*.p8`/`*.pem`/`*.key`、`Thumbs.db`）；更新 `README.md`（修正 API 路径、补全环境变量/本地开发/架构差异与 FAQ）；修复 `release.yml` 打标发布时贡献者对比区间。
+
 ## v1.0.0 (2026-11-20)
 
 ### 协议与 Worker 核心优化

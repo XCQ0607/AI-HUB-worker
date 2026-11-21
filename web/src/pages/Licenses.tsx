@@ -14,6 +14,7 @@ function expiryBadge(exp?: number | null) {
 export function Licenses() {
   const toast = useToast()
   const [items, setItems] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
   const [mode, setMode] = useState<'open' | 'restricted'>('open')
   const [controlled, setControlled] = useState(false)
   const [q, setQ] = useState('')
@@ -25,8 +26,8 @@ export function Licenses() {
   // Create modal
   const [createOpen, setCreateOpen] = useState(false)
   const [note, setNote] = useState('')
-  const [count, setCount] = useState(1)
-  const [deviceLimit, setDeviceLimit] = useState(1)
+  const [count, setCount] = useState('1')
+  const [deviceLimit, setDeviceLimit] = useState('1')
   const [expiresInDays, setExpiresInDays] = useState(0)
   const [customCode, setCustomCode] = useState('')
   const [made, setMade] = useState<string[]>([])
@@ -51,10 +52,26 @@ export function Licenses() {
       setItems(l.items)
       setMode(s.mode)
       setControlled(!!s.modeControlled)
-    } catch (e: any) { toast(e.message, 'error') }
+    } catch (e: any) { toast(e.message, 'error') } finally { setLoading(false) }
   }, [toast])
 
   useEffect(() => { load() }, [load])
+
+  const exportLicenses = async (fmt: 'csv' | 'txt') => {
+    try {
+      const res = await fetch(`/api/platform/v1/licenses/export?format=${fmt}`, { credentials: 'same-origin' })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || `导出失败 (HTTP ${res.status})`)
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const el = document.createElement('a')
+      el.href = url; el.download = `ai-hub-licenses.${fmt}`; el.click()
+      URL.revokeObjectURL(url)
+      toast(`已导出激活码 (${fmt.toUpperCase()})`, 'success')
+    } catch (e: any) { toast(e.message, 'error') }
+  }
 
   const openDevices = async (lic: any) => {
     setSelected(lic)
@@ -72,10 +89,18 @@ export function Licenses() {
   }
 
   const create = async () => {
+    const parsedCount = Number(count)
+    const parsedLimit = Number(deviceLimit)
+    if (!Number.isInteger(parsedCount) || parsedCount < 1 || parsedCount > 100) {
+      return toast('生成数量需为 1–100 的整数', 'error')
+    }
+    if (!Number.isInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 50) {
+      return toast('单码可绑设备需为 1–50 的整数', 'error')
+    }
     setCreating(true)
     try {
       const r = await api<{ codes: string[] }>('/licenses', {
-        body: { note, count, deviceLimit, expiresInDays, code: count === 1 && customCode.trim() ? customCode.trim() : undefined },
+        body: { note, count: parsedCount, deviceLimit: parsedLimit, expiresInDays, code: parsedCount === 1 && customCode.trim() ? customCode.trim() : undefined },
       })
       setMade(r.codes)
       toast(`已生成 ${r.codes.length} 个激活码`, 'success')
@@ -97,7 +122,7 @@ export function Licenses() {
       const exp = l.expiresAt && l.expiresAt < Date.now()
       if (statusFilter === 'active' && (l.status !== 'active' || exp)) return false
       if (statusFilter === 'revoked' && l.status !== 'revoked') return false
-      if (statusFilter === 'expired' && !exp) return false
+      if (statusFilter === 'expired' && (l.status === 'revoked' || !exp)) return false
       if (q.trim() && !`${l.code} ${l.note} ${l.bound ?? ''}`.toLowerCase().includes(q.trim().toLowerCase())) return false
       return true
     })
@@ -126,7 +151,7 @@ export function Licenses() {
         }>
         <div className="banner">
           {mode === 'restricted'
-            ? <><ShieldAlert size={16} className="warn" /><span>当前为 <b>限制模式</b>：宿主插件必须携带有效且未过期的激活码（请求头 <code>x-dsh-license</code>）方可通过握手。</span></>
+            ? <><ShieldAlert size={16} className="warn" /><span>当前为 <b>限制模式</b>：宿主插件连接 <code>/tunnel</code> 时必须携带有效且未过期的激活码（在桌面插件面板「中转设置」中填入，或通过握手请求头 <code>x-dsh-license</code> 传递）。</span></>
             : <span>当前为 <b>开放模式</b>：任何知道本中转地址的宿主都可直接建隧道（仍受 <code>TUNNEL_REGISTER_SECRET</code> 约束）。</span>}
         </div>
       </Card>
@@ -134,10 +159,10 @@ export function Licenses() {
       <Card title="激活码台账" subtitle="支持有效期控制、多机配额、批量操作与 CSV/TXT 导出"
         action={
           <div className="btn-row">
-            <a className="btn-ghost btn-sm" href="/api/platform/v1/licenses/export?format=csv" download><Download size={13} />CSV</a>
-            <a className="btn-ghost btn-sm" href="/api/platform/v1/licenses/export?format=txt" download><Download size={13} />TXT</a>
-            <button className="icon-btn" onClick={load} title="刷新"><RefreshCw size={14} /></button>
-            <button className="btn-primary" onClick={() => { setMade([]); setNote(''); setCustomCode(''); setCount(1); setDeviceLimit(1); setExpiresInDays(0); setCreateOpen(true) }}>
+            <button type="button" className="btn-ghost btn-sm" onClick={() => exportLicenses('csv')}><Download size={13} />CSV</button>
+            <button type="button" className="btn-ghost btn-sm" onClick={() => exportLicenses('txt')}><Download size={13} />TXT</button>
+            <button className="icon-btn" onClick={load} title="刷新" aria-label="刷新激活码列表"><RefreshCw size={14} /></button>
+            <button className="btn-primary" onClick={() => { setMade([]); setNote(''); setCustomCode(''); setCount('1'); setDeviceLimit('1'); setExpiresInDays(0); setCreateOpen(true) }}>
               <Plus size={14} />生成激活码
             </button>
           </div>
@@ -162,12 +187,14 @@ export function Licenses() {
           <button className="btn-ghost btn-sm danger" onClick={() => setBatchDel(true)}>批量删除</button>
         </BatchBar>
 
-        {paged.length === 0 ? (
+        {loading ? (
+          <p className="muted pad">读取激活码列表…</p>
+        ) : paged.length === 0 ? (
           <EmptyState icon={<KeyRound size={24} />} title={items.length === 0 ? '暂无激活码' : '没有匹配的激活码'} hint="点击右上角「生成激活码」创建授权凭据" />
         ) : (
           <div className="table">
             <div className="tr t-lic th">
-              <input type="checkbox" checked={paged.length > 0 && paged.every(l => selectedIds.has(l.id))}
+              <input type="checkbox" aria-label="全选当前页激活码" checked={paged.length > 0 && paged.every(l => selectedIds.has(l.id))}
                 onChange={e => {
                   const n = new Set(selectedIds)
                   paged.forEach(l => e.target.checked ? n.add(l.id) : n.delete(l.id))
@@ -184,7 +211,7 @@ export function Licenses() {
             {paged.map(l => (
               <div className="tr t-lic" key={l.id}>
                 <label className="chk-row" data-label="选择">
-                  <input type="checkbox" checked={selectedIds.has(l.id)} onChange={e => {
+                  <input type="checkbox" aria-label={`选择激活码 ${l.code}`} checked={selectedIds.has(l.id)} onChange={e => {
                     const n = new Set(selectedIds); e.target.checked ? n.add(l.id) : n.delete(l.id); setSelectedIds(n)
                   }} />
                 </label>
@@ -199,13 +226,13 @@ export function Licenses() {
                 <span className="muted ellipsis" data-label="备注" title={l.note}>{l.note || '—'}</span>
                 <span className="muted" data-label="创建">{ago(l.created)}</span>
                 <span className="actions">
-                  <button className="icon-btn" title="续期/改有效期" onClick={() => { setRenewTarget(l); setRenewDays(30) }}><CalendarClock size={14} /></button>
+                  <button className="icon-btn" title="续期/改有效期" aria-label={`续期 ${l.code}`} onClick={() => { setRenewTarget(l); setRenewDays(30) }}><CalendarClock size={14} /></button>
                   <button className="btn-ghost btn-sm" onClick={async () => {
                     try { await api(`/licenses/${l.id}/toggle`, { method: 'POST' }); toast('状态已更新', 'success'); load() }
                     catch (e: any) { toast(e.message, 'error') }
                   }}>{l.status === 'active' ? '吊销' : '恢复'}</button>
-                  {(l.deviceCount > 0 || l.bound) && <button className="icon-btn" title="解绑全部" onClick={() => setUnbindAll(l)}><Unlink size={14} /></button>}
-                  <button className="icon-btn danger" title="删除" onClick={() => setDelLic(l)}><Trash2 size={14} /></button>
+                  {(l.deviceCount > 0 || l.bound) && <button className="icon-btn" title="解绑全部" aria-label={`解绑 ${l.code} 的全部设备`} onClick={() => setUnbindAll(l)}><Unlink size={14} /></button>}
+                  <button className="icon-btn danger" title="删除" aria-label={`删除激活码 ${l.code}`} onClick={() => setDelLic(l)}><Trash2 size={14} /></button>
                 </span>
               </div>
             ))}
@@ -229,8 +256,8 @@ export function Licenses() {
         ) : (
           <div className="form">
             <div className="form-2">
-              <label>生成数量 (1–100)<input type="number" min={1} max={100} value={count} onChange={e => setCount(Math.max(1, +e.target.value))} /></label>
-              <label>单码可绑设备 (1–50)<input type="number" min={1} max={50} value={deviceLimit} onChange={e => setDeviceLimit(Math.max(1, +e.target.value))} /></label>
+              <label>生成数量 (1–100)<input type="number" min={1} max={100} value={count} onChange={e => setCount(e.target.value)} /></label>
+              <label>单码可绑设备 (1–50)<input type="number" min={1} max={50} value={deviceLimit} onChange={e => setDeviceLimit(e.target.value)} /></label>
             </div>
             <label>有效期
               <select value={expiresInDays} onChange={e => setExpiresInDays(+e.target.value)}>
@@ -241,7 +268,7 @@ export function Licenses() {
                 <option value={365}>365 天</option>
               </select>
             </label>
-            {count === 1 && <label>自定义激活码（可选）<input placeholder="如 AIHUB-VIP-0001" value={customCode} onChange={e => setCustomCode(e.target.value)} /></label>}
+            {Number(count) === 1 && <label>自定义激活码（可选）<input placeholder="如 AIHUB-VIP-0001" value={customCode} onChange={e => setCustomCode(e.target.value)} /></label>}
             <label>备注（可选）<input placeholder="例如：家里的 Mac mini" value={note} onChange={e => setNote(e.target.value)} /></label>
           </div>
         )}

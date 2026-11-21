@@ -22,7 +22,7 @@ const PREF_KEY: Record<string, string> = {
 }
 
 function pemToDer(pem: string): Uint8Array {
-  const b64 = pem.split(/\r?\n/).filter(l => !l.startsWith('-----') && l.trim()).join('')
+  const b64 = pem.replace(/\\n/g, '\n').split(/\r?\n/).filter(l => !l.startsWith('-----') && l.trim()).join('')
   const bin = atob(b64)
   const out = new Uint8Array(bin.length)
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
@@ -67,6 +67,7 @@ function fitPayload(payload: any) {
 
 export class ApnsService {
   private signingKey?: Promise<CryptoKey>
+  private cachedJwt?: { token: string; exp: number }
 
   constructor(private sql: SqlStorage, private env: ApnsEnv) {
     sql.exec(`
@@ -83,23 +84,33 @@ export class ApnsService {
   }
 
   enabled(): boolean {
-    return Boolean(this.env.APNS_KEY?.trim() && this.env.APNS_KEY_ID?.trim() && this.env.APNS_TEAM_ID?.trim())
+    return Boolean(this.env.APNS_KEY?.trim() && this.env.APNS_KEY_ID?.trim() && this.env.APNS_TEAM_ID?.trim() && this.env.APNS_TOPIC?.trim())
   }
 
   private async getKey(): Promise<CryptoKey> {
     if (!this.signingKey) {
-      const der = pemToDer(this.env.APNS_KEY!.trim())
-      this.signingKey = crypto.subtle.importKey('pkcs8', der, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign'])
+      const p = (async () => {
+        const der = pemToDer(this.env.APNS_KEY!.trim())
+        return crypto.subtle.importKey('pkcs8', der, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign'])
+      })()
+      this.signingKey = p.catch(err => {
+        if (this.signingKey === p) this.signingKey = undefined
+        throw err
+      })
     }
     return this.signingKey
   }
 
   private async providerJwt(): Promise<string> {
+    const now = Date.now()
+    if (this.cachedJwt && now < this.cachedJwt.exp) return this.cachedJwt.token
     const header = b64uEncode(enc.encode(JSON.stringify({ alg: 'ES256', kid: this.env.APNS_KEY_ID!.trim() })))
-    const claims = b64uEncode(enc.encode(JSON.stringify({ iss: this.env.APNS_TEAM_ID!.trim(), iat: Math.floor(Date.now() / 1000) })))
+    const claims = b64uEncode(enc.encode(JSON.stringify({ iss: this.env.APNS_TEAM_ID!.trim(), iat: Math.floor(now / 1000) })))
     const input = `${header}.${claims}`
     const sig = new Uint8Array(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, await this.getKey(), enc.encode(input)))
-    return `${input}.${b64uEncode(sig)}`
+    const token = `${input}.${b64uEncode(sig)}`
+    this.cachedJwt = { token, exp: now + 45 * 60_000 }
+    return token
   }
 
   upsertToken(instance: string, deviceId: string, platform: string, token: string) {
@@ -136,7 +147,7 @@ export class ApnsService {
     })
   }
 
-  private async sendOne(token: string, payload: unknown): Promise<{ ok: boolean; error?: string }> {
+  private async sendOne(token: string, payload: unknown): Promise<{ ok: boolean; status?: number; error?: string }> {
     try {
       const jwt = await this.providerJwt()
       const headers: Record<string, string> = {
@@ -151,8 +162,8 @@ export class ApnsService {
         headers,
         body: JSON.stringify(payload),
       })
-      if (res.ok) return { ok: true }
-      return { ok: false, error: `APNs ${res.status}: ${await res.text().catch(() => '')}` }
+      if (res.ok) return { ok: true, status: res.status }
+      return { ok: false, status: res.status, error: `APNs ${res.status}: ${await res.text().catch(() => '')}` }
     } catch (e: any) {
       return { ok: false, error: e?.message ?? String(e) }
     }
@@ -161,11 +172,12 @@ export class ApnsService {
   async sendCompletion(instanceId: string, msg: any): Promise<{ sent: number; failed: number; errors: string[] }> {
     if (!this.enabled() || !instanceId || !msg) return { sent: 0, failed: 0, errors: [] }
     const deviceId = String(msg.deviceId ?? '').trim()
-    const title = String(msg.title ?? '')
+    const title = String(msg.title ?? '').trim()
+    if (!title) return { sent: 0, failed: 0, errors: [] }
     const body = String(msg.body ?? '')
     const sessionId = String(msg.sessionId ?? '')
     const category = String(msg.category ?? '')
-    const kind = String(msg.kind ?? '')
+    const kind = String(msg.pushKind || msg.kind || '')
     const interaction = msg.interaction && typeof msg.interaction === 'object' ? msg.interaction : undefined
 
     const tokens = this.sql.exec('SELECT device_id,token FROM push_tokens WHERE instance=?', instanceId).toArray()
@@ -188,7 +200,11 @@ export class ApnsService {
       fitPayload(payload)
       const res = await this.sendOne(String(row.token), payload)
       if (res.ok) sent++
-      else { failed++; if (res.error) errors.push(res.error) }
+      else {
+        if (res.status === 410) this.deleteDevice(instanceId, dev)
+        failed++
+        if (res.error) errors.push(res.error)
+      }
     }
     return { sent, failed, errors }
   }

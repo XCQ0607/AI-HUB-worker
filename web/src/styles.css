@@ -30,8 +30,11 @@
   --cyan: #0d9488;
 }
 
-* { box-sizing: border-box; scrollbar-width: none; }
-*::-webkit-scrollbar { width: 0; height: 0; display: none; }
+* { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 35%, transparent) transparent; }
+*::-webkit-scrollbar { width: 6px; height: 6px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted) 32%, transparent); border-radius: 999px; }
+*::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--muted) 52%, transparent); }
 body { margin: 0; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; overflow-x: hidden; }
 h1 { font-size: 22px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
 h2, h3 { margin: 0; font-weight: 600; }
@@ -110,7 +113,8 @@ label.chk-row { flex-direction: row; align-items: center; gap: 8px; color: var(-
 .tip-icon { color: var(--muted); display: inline-flex; cursor: help; }
 .stat { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; display: flex; flex-direction: column; gap: 6px; transition: transform .15s ease, border-color .15s ease; min-width: 0; overflow: hidden; }
 .stat.clickable { cursor: pointer; }
-.stat.clickable:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.stat.clickable:hover, .stat.clickable:focus-visible { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); outline: none; }
+.stat.clickable:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 38%, transparent); }
 .stat-top { display: flex; justify-content: space-between; align-items: center; gap: 6px; min-width: 0; color: var(--muted); font-size: 12.5px; }
 .stat-top svg { flex-shrink: 0; }
 .stat b { font-size: 24px; letter-spacing: -0.02em; }
@@ -132,7 +136,7 @@ label.chk-row { flex-direction: row; align-items: center; gap: 8px; color: var(-
 .badge-cyan { background: color-mix(in srgb, var(--cyan) 14%, transparent); color: var(--cyan); border-color: color-mix(in srgb, var(--cyan) 32%, transparent); }
 .b-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
 
-/* Tables, Sorting, BatchBar & Pagination (No native scrollbars) */
+/* Tables, Sorting, BatchBar & Pagination */
 .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
 .search-box { display: flex; align-items: center; gap: 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; padding: 0 10px; min-width: 180px; flex: 1; max-width: 340px; }
 .search-box input { border: 0; background: transparent; padding: 8px 0; }
@@ -153,7 +157,8 @@ label.chk-row { flex-direction: row; align-items: center; gap: 8px; color: var(-
 .tr { display: grid; gap: 10px; padding: 11px 8px; border-top: 1px solid var(--line); align-items: center; width: 100%; min-width: 0; }
 .tr.th { border-top: 0; color: var(--muted); font-size: 12px; padding-top: 4px; }
 .tr.clickable { cursor: pointer; border-radius: 8px; }
-.tr.clickable:hover { background: var(--panel-2); }
+.tr.clickable:hover, .tr.clickable:focus-visible { background: var(--panel-2); outline: none; }
+.tr.clickable:focus-visible { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent); }
 .t-tun { grid-template-columns: 26px 1.6fr 1.1fr .7fr .9fr .9fr 76px; }
 .t-lic { grid-template-columns: 26px 1.4fr .6fr .8fr .8fr .9fr .7fr 150px; }
 .t-mig { grid-template-columns: 1.5fr 2fr .9fr 70px; }
@@ -242,6 +247,15 @@ label.chk-row { flex-direction: row; align-items: center; gap: 8px; color: var(-
   .mobile-only { display: inline-flex; }
   .main { padding: 16px; }
   .two-col, .form-2 { grid-template-columns: 1fr; }
+}
+
+/* Tablet / narrow desktop (641-1050px): horizontal scroll for wide multi-column tables */
+@media (min-width: 641px) and (max-width: 1050px) {
+  .table { overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 4px; }
+  .tr.t-lic { min-width: 780px; }
+  .tr.t-wh { min-width: 720px; }
+  .tr.t-tun { min-width: 700px; }
+  .tr.t-push, .tr.t-ota, .tr.t-mir, .tr.t-aud { min-width: 640px; }
 }
 
 /* Mobile Card-List Layout (<640px): eliminates horizontal table overflow */

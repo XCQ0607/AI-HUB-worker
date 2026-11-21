@@ -9,6 +9,7 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
   const [minV, setMinV] = useState('')
   const [fallbackMs, setFallbackMs] = useState('0')
   const [heartbeatMs, setHeartbeatMs] = useState('40000')
+  const [curPw, setCurPw] = useState('')
   const [pw1, setPw1] = useState('')
   const [pw2, setPw2] = useState('')
   const [pwConfirm, setPwConfirm] = useState(false)
@@ -56,9 +57,9 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
   const changePassword = async () => {
     setBusy(true)
     try {
-      await api('/admin/password', { body: { password: pw1 } })
+      await api('/admin/password', { body: { currentPassword: curPw, password: pw1 } })
       toast('密码已更新，请重新登录', 'success')
-      setPwConfirm(false); setPw1(''); setPw2(''); onLogout()
+      setPwConfirm(false); setCurPw(''); setPw1(''); setPw2(''); onLogout()
     } catch (e: any) { toast(e.message, 'error') } finally { setBusy(false) }
   }
 
@@ -142,7 +143,7 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
           </div>
         </Card>
 
-        <Card title="镜像与环境变量状态" subtitle="Secret 与绑定项由 env.json / wrangler secret 管理">
+        <Card title="环境与绑定状态" subtitle="Secret 与绑定项由 env.json / wrangler secret 管理">
           <div className="kv-list">
             <div className="kv-row"><span className="muted">隧道注册密钥 (TUNNEL_REGISTER_SECRET)</span>
               <Badge tone={data.registerSecretSet ? 'ok' : 'neutral'}>{data.registerSecretSet ? '已启用校验' : '未设置'}</Badge></div>
@@ -167,6 +168,9 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
                 <button className={!data.mirrorEnabled ? 'active' : ''} onClick={() => save({ mirrorEnabled: false })}>仅保留凭据摘要</button>
               </div>
             </label>
+            <p className="muted small">
+              选择「仅保留凭据摘要」时，中转不再缓存会话/工作区列表正文，但仍保留已配对手机的凭据摘要，以确保 <code>/push-token</code> 与 <code>/blob/*</code> 鉴权正常工作。
+            </p>
             <label>慢隧道回退阈值 (ms，0 = 仅断线时兜底)
               <div className="btn-row">
                 <input type="number" min={0} max={30000} value={fallbackMs} onChange={e => setFallbackMs(e.target.value)} />
@@ -176,12 +180,14 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
           </div>
         </Card>
 
-        <Card title="修改管理员密码" subtitle="修改后当前全部会话将失效并跳转重新登录">
+        <Card title="修改管理员密码" subtitle="需校验当前密码；修改后当前全部会话将失效并跳转重新登录">
           <div className="form">
-            <label>新密码（至少 12 位）<input type="password" value={pw1} onChange={e => setPw1(e.target.value)} /></label>
-            <label>确认新密码<input type="password" value={pw2} onChange={e => setPw2(e.target.value)} /></label>
+            <label>当前密码<input type="password" autoComplete="current-password" value={curPw} onChange={e => setCurPw(e.target.value)} /></label>
+            <label>新密码（至少 12 位）<input type="password" autoComplete="new-password" value={pw1} onChange={e => setPw1(e.target.value)} /></label>
+            <label>确认新密码<input type="password" autoComplete="new-password" value={pw2} onChange={e => setPw2(e.target.value)} /></label>
             <div>
               <button className="btn-primary" onClick={() => {
+                if (!curPw) return toast('请输入当前密码', 'error')
                 if (pw1.length < 12) return toast('新密码至少需要 12 位', 'error')
                 if (pw1 !== pw2) return toast('两次输入的密码不一致', 'error')
                 setPwConfirm(true)
@@ -203,7 +209,7 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
                   <code data-label="前缀" className="mono muted">{t.prefix}</code>
                   <span data-label="最近使用" className="muted">{t.lastUsed ? ago(t.lastUsed) : '从未使用'}</span>
                   <span className="actions">
-                    <button className="icon-btn danger" title="撤销" onClick={() => setDelTok(t)}><Trash2 size={14} /></button>
+                    <button className="icon-btn danger" title="撤销" aria-label={`撤销监控令牌 ${t.name}`} onClick={() => setDelTok(t)}><Trash2 size={14} /></button>
                   </span>
                 </div>
               ))}
@@ -214,7 +220,7 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
         <Card title="两步验证 (TOTP 2FA)" subtitle="RFC 6238 动态口令保护，兼容 Google/1Password 验证器"
           action={totp && <Badge tone={totp.enabled ? 'ok' : 'neutral'}>{totp.enabled ? '已启用' : '未启用'}</Badge>}>
           {!totp?.available ? (
-            <p className="muted small">当前使用静态 ADMIN_TOKEN 登录，仅邮箱密码管理员账号支持绑定 TOTP。</p>
+            <p className="muted small">当前会话未绑定邮箱管理员账号（<code>ADMIN_TOKEN</code> 仅用于 API / CLI / 初始化引导），仅邮箱密码管理员账号支持绑定 TOTP。</p>
           ) : totp.enabled ? (
             <div className="stack-xs">
               <div className="kv-list">
@@ -285,17 +291,19 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
             {!setupData.qrSvg && (
               <div className="kv-row"><span className="muted">otpauth URI</span><div className="kv-val"><code className="ellipsis">{setupData.uri}</code><CopyBtn value={setupData.uri} label="otpauth URI" /></div></div>
             )}
-            <label>输入验证器显示的 6 位数字<input value={totpCode} onChange={e => setTotpCode(e.target.value)} placeholder="123456" autoFocus /></label>
+            <label>输入验证器显示的 6 位数字
+              <input value={totpCode} onChange={e => setTotpCode(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !busy) enableTotp() }} placeholder="123456" autoFocus />
+            </label>
           </div>
         ))}
       </Modal>
 
       <Modal open={reconfigOpen} title="验证身份以重新绑定 2FA" onClose={closeReconfigModal}
-        footer={<><button className="btn-ghost" onClick={closeReconfigModal}>取消</button><button className="btn-primary" disabled={busy} onClick={() => startTotpSetup({ password: reconfigPw, code: reconfigCode })}>验证并重置密钥</button></>}>
+        footer={<><button className="btn-ghost" onClick={closeReconfigModal}>取消</button><button className="btn-primary" disabled={busy} onClick={() => startTotpSetup({ password: reconfigPw, code: reconfigCode })}>验证并生成新密钥</button></>}>
         <div className="form">
-          <div className="banner"><span className="small">重新绑定将生成新密钥并重置当前已启用的两步验证。</span></div>
+          <div className="banner"><span className="small">验证通过后将生成待绑定新密钥；在新密钥验证启用前，当前已启用的两步验证仍保持生效，取消操作不会关闭 2FA。</span></div>
           <label>当前管理员密码<input type="password" value={reconfigPw} onChange={e => setReconfigPw(e.target.value)} autoFocus /></label>
-          <label>6 位动态验证码或 8 位恢复码<input value={reconfigCode} onChange={e => setReconfigCode(e.target.value)} placeholder="123456 或 ABCD-EF12" /></label>
+          <label>6 位动态验证码或 8 位恢复码<input value={reconfigCode} onChange={e => setReconfigCode(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !busy) startTotpSetup({ password: reconfigPw, code: reconfigCode }) }} placeholder="123456 或 ABCD-EF12" /></label>
         </div>
       </Modal>
 
@@ -303,7 +311,7 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
         footer={<><button className="btn-ghost" onClick={closeDisableModal}>取消</button><button className="btn-danger" disabled={busy} onClick={disableTotp}>确认关闭</button></>}>
         <div className="form">
           <label>当前管理员密码<input type="password" value={disPw} onChange={e => setDisPw(e.target.value)} /></label>
-          <label>6 位动态验证码或 8 位恢复码<input value={disCode} onChange={e => setDisCode(e.target.value)} placeholder="123456 或 ABCD-EF12" /></label>
+          <label>6 位动态验证码或 8 位恢复码<input value={disCode} onChange={e => setDisCode(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !busy) disableTotp() }} placeholder="123456 或 ABCD-EF12" /></label>
         </div>
       </Modal>
     </div>

@@ -29,6 +29,8 @@ const HEALTH = '{"ok":true,"service":"dsh-mobile-relay"}'
 const CHUNK = 256 * 1024
 const MAX_BODY = 67 * 1024 * 1024
 const MAX_PENDING = 256
+const MAX_WS_CONNECTIONS = 256
+const MAX_WS_MSG = 8 * 1024 * 1024
 const MAX_SSE_CONNECTIONS = 64
 const MAX_SSE_PER_DEVICE = 3
 const HEADER_TIMEOUT = 60_000
@@ -36,7 +38,16 @@ const MAX_BLOB = 5 * 1024 * 1024, MAX_BLOB_INSTANCE = 64 * 1024 * 1024, BLOB_TTL
 const NULL_BODY = new Set([101, 204, 205, 304])
 const enc = new TextEncoder()
 const notFound = () => new Response(NOT_FOUND, { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } })
-const closeReason = (s: string) => enc.encode(s).length <= 123 ? s : s.slice(0, 40)
+function closeReason(s: string): string {
+  if (enc.encode(s).byteLength <= 123) return s
+  let out = '', bytes = 0
+  for (const ch of s) {
+    const n = enc.encode(ch).byteLength
+    if (bytes + n > 123) break
+    out += ch; bytes += n
+  }
+  return out
+}
 
 export class Hub extends DurableObject<Env> {
   private admin: Admin
@@ -52,6 +63,7 @@ export class Hub extends DurableObject<Env> {
   private unregTimeouts = 0
   private blobEvicted = 0
   private lastSlaveReport = 0
+  private lastBlobSweep = 0
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
@@ -66,12 +78,29 @@ export class Hub extends DurableObject<Env> {
   }
 
   // ---------- helpers ----------
-  private nextId() { do { this.seq = (this.seq + 1) >>> 0 || 1 } while (this.pending.has(this.seq) || this.wsState.has(this.seq)); return this.seq }
+  private nextId() {
+    do { this.seq = (this.seq + 1) >>> 0 || 1 }
+    while (this.pending.has(this.seq) || this.wsState.has(this.seq) || this.ctx.getWebSockets('p' + this.seq).length > 0)
+    return this.seq
+  }
   private tunnels(): { ws: WebSocket; att: TAtt }[] {
     return this.ctx.getWebSockets('tunnel').map(ws => ({ ws, att: ws.deserializeAttachment() as TAtt })).filter(x => x.att?.kind === 'tunnel')
   }
   private registered(instance: string) { return this.tunnels().filter(t => t.att.reg && t.att.instance === instance).pop() }
   private byTid(tid: string) { return this.tunnels().find(t => t.att.tid === tid) }
+  private phoneById(id: number, tid: string): WebSocket | null {
+    if (id === 0) return null
+    const ws = this.ctx.getWebSockets('p' + id)[0]
+    if (!ws) return null
+    const patt = ws.deserializeAttachment() as PAtt | null
+    return patt?.kind === 'phone' && patt.tid === tid ? ws : null
+  }
+  private async deleteR2Keys(bucket: R2Bucket, keys: string[]) {
+    for (let i = 0; i < keys.length; i += 100) {
+      const chunk = keys.slice(i, i + 100)
+      if (chunk.length) await bucket.delete(chunk)
+    }
+  }
   private send(ws: WebSocket, frame: ArrayBuffer) { try { ws.send(frame) } catch { /* closed */ } }
   private async ensureAlarm(ms: number) {
     const cur = await this.ctx.storage.getAlarm()
@@ -81,6 +110,9 @@ export class Hub extends DurableObject<Env> {
   private pluginSummary() {
     const cutoff = Date.now() - 3600_000
     const min = this.admin.minVersion
+    for (const [k, v] of this.pluginRejected) {
+      if (v.at < cutoff) this.pluginRejected.delete(k)
+    }
     let seen = 0, outdated = 0
     for (const [k, v] of this.pluginSeen) {
       if (v.at < cutoff) { this.pluginSeen.delete(k); continue }
@@ -117,8 +149,8 @@ export class Hub extends DurableObject<Env> {
       const rows = instance
         ? this.ctx.storage.sql.exec('SELECT instance,scope,k FROM blobs WHERE instance=?', instance).toArray()
         : this.ctx.storage.sql.exec('SELECT instance,scope,k FROM blobs').toArray()
-      if (bucket) {
-        for (const r of rows) await bucket.delete(this.blobKey(String(r.instance), String(r.scope), String(r.k)))
+      if (bucket && rows.length) {
+        await this.deleteR2Keys(bucket, rows.map(r => this.blobKey(String(r.instance), String(r.scope), String(r.k))))
       }
       if (instance) this.ctx.storage.sql.exec('DELETE FROM blobs WHERE instance=?', instance)
       else this.ctx.storage.sql.exec('DELETE FROM blobs')
@@ -263,6 +295,7 @@ export class Hub extends DurableObject<Env> {
         return
       }
       case T.wsOpen: {
+        if (!att.reg || !this.phoneById(f.id, att.tid)) return
         const st = this.wsState.get(f.id)
         if (!st) return
         st.ready = true
@@ -270,22 +303,25 @@ export class Hub extends DurableObject<Env> {
         return
       }
       case T.wsError: {
-        if (f.id === 0) return
-        const phone = this.ctx.getWebSockets('p' + f.id)[0]
+        if (!att.reg) return
+        const phone = this.phoneById(f.id, att.tid)
+        if (!phone) return
         this.wsState.delete(f.id)
-        try { phone?.close(1011, closeReason(parseJson(f.payload)?.message ?? 'upstream ws error')) } catch { /* */ }
+        try { phone.close(1011, closeReason(parseJson(f.payload)?.message ?? 'upstream ws error')) } catch { /* */ }
         return
       }
       case T.wsText: case T.wsBinary: {
-        const phone = this.ctx.getWebSockets('p' + f.id)[0]
+        if (!att.reg) return
+        const phone = this.phoneById(f.id, att.tid)
         if (!phone) return
         try { f.type === T.wsText ? phone.send(text(f.payload)) : phone.send(f.payload.slice().buffer) } catch { /* */ }
         return
       }
       case T.wsClose: {
-        const phone = this.ctx.getWebSockets('p' + f.id)[0]
-        this.wsState.delete(f.id)
+        if (!att.reg) return
+        const phone = this.phoneById(f.id, att.tid)
         if (!phone) return
+        this.wsState.delete(f.id)
         let code = 1000, reason = ''
         if (f.payload.length >= 2) { code = new DataView(f.payload.buffer, f.payload.byteOffset).getUint16(0); reason = text(f.payload.subarray(2)) }
         try { phone.close(validCloseCode(code) ? code : 1000, closeReason(reason)) } catch { /* */ }
@@ -314,7 +350,10 @@ export class Hub extends DurableObject<Env> {
       case T.migrate: {
         if (!att.reg || !att.instance) return
         const m = parseJson(f.payload)
-        this.admin.setMigration(att.instance, typeof m?.to === 'string' ? m.to.slice(0, 512) : '')
+        if (!m || typeof m.to !== 'string') return
+        const dest = m.to.trim().slice(0, 512)
+        if (/[\r\n\x00-\x1f\x7f]/.test(dest)) return
+        this.admin.setMigration(att.instance, dest)
         return
       }
       case T.blobPut: await this.blobPut(att, parseJson(f.payload)); return
@@ -335,6 +374,7 @@ export class Hub extends DurableObject<Env> {
       try { ws.close(1008, closeReason(message)) } catch { /* */ }
       this.dropTunnel(att.tid)
     }
+    if (instance && /[\/\x00-\x1f\x7f]/.test(instance)) return reject('invalid instanceId', { code: 'invalid_instance' })
     const license = String(r.license || att.license || '')
     const err = this.admin.admit(license, instance)
     if (err) return reject(err)
@@ -353,6 +393,8 @@ export class Hub extends DurableObject<Env> {
     if (instance) {
       for (const o of this.tunnels()) {
         if (o.att.tid !== att.tid && o.att.reg && o.att.instance === instance) {
+          o.att.reg = false
+          try { o.ws.serializeAttachment(o.att) } catch { /* */ }
           this.dropTunnel(o.att.tid)
           try { o.ws.close(1000, 'superseded') } catch { /* */ }
         }
@@ -368,7 +410,8 @@ export class Hub extends DurableObject<Env> {
     const p = this.pending.get(f.id)
     if (!p || p.tid !== att.tid || p.headSent) return
     const h = parseJson(f.payload) ?? {}
-    const status = Number(h.status) >= 200 && Number(h.status) <= 599 ? Number(h.status) : 502
+    const rawStatus = Number(h.status)
+    const status = Number.isInteger(rawStatus) && rawStatus >= 200 && rawStatus <= 599 ? rawStatus : 502
     const headers = new Headers()
     for (const [k, v] of Object.entries(h.headers ?? {})) {
       if (!forwardable(k) && k.toLowerCase() !== 'content-length') continue
@@ -386,7 +429,11 @@ export class Hub extends DurableObject<Env> {
       pull: () => { if (p.paused) { p.paused = false; const t = this.byTid(p.tid); if (t) this.send(t.ws, encodeFrame(T.httpResume, id)) } },
       cancel: () => this.cancel(id),
     }, { highWaterMark: 4 * 1024 * 1024, size: (c: Uint8Array) => c.byteLength })
-    p.resolve(new Response(stream, { status, headers }))
+    const init: ResponseInit = { status, headers }
+    // Preserve pre-encoded upstream bytes out of the DO; worker/src/index.ts intentionally keeps default
+    // encodeBody ('automatic') because env.HUB.get(...).fetch() auto-decompresses res.body across the DO boundary.
+    if (headers.has('content-encoding')) init.encodeBody = 'manual'
+    p.resolve(new Response(stream, init))
   }
 
   private finishError(id: number, p: Pend, message: string, status: number) {
@@ -395,12 +442,14 @@ export class Hub extends DurableObject<Env> {
     else try { p.ctrl?.error(new Error(message)) } catch { /* */ }
   }
 
-  private cancel(id: number) {
+  private cancel(id: number, status = 499, error = 'request cancelled') {
     const p = this.pending.get(id)
     if (!p) return
     this.pending.delete(id); clearTimeout(p.timer ?? null); clearTimeout(p.fallbackTimer ?? null)
     const t = this.byTid(p.tid)
     if (t) this.send(t.ws, encodeFrame(T.httpCancel, id))
+    if (!p.headSent) { p.headSent = true; p.resolve(json(status, { ok: false, error })) }
+    else try { p.ctrl?.error(new Error(error)) } catch { /* already closed */ }
   }
 
   private dropTunnel(tid: string) {
@@ -435,7 +484,8 @@ export class Hub extends DurableObject<Env> {
       }
     }
     try { ws.close(validCloseCode(code) ? code : 1000, closeReason(reason)) } catch { /* already closed */ }
-    if (att?.kind === 'tunnel' && !this.admin.isSlave) {
+    const isSlave = this.admin.isSlave && Boolean(this.env.PLATFORM_CLAIM_CODE?.trim())
+    if (att?.kind === 'tunnel' && !isSlave) {
       const remaining = this.tunnels().filter(t => t.ws !== ws)
       if (remaining.length === 0) await this.ctx.storage.deleteAlarm()
     }
@@ -478,6 +528,8 @@ export class Hub extends DurableObject<Env> {
       if (data?.admissionMode === 'open' || data?.admissionMode === 'restricted') {
         this.admin.setSetting('master_manages_mode', '1')
         this.admin.setSetting('admission_mode', data.admissionMode)
+      } else if (data?.admissionMode === null || data?.managed === false) {
+        this.admin.setSetting('master_manages_mode', '0')
       }
       this.admin.setSetting('master_last_report_at', String(now))
       this.admin.setSetting('master_last_error', '')
@@ -512,6 +564,10 @@ export class Hub extends DurableObject<Env> {
     const slaveInterval = Math.max(30, Number(this.env.PLATFORM_REPORT_INTERVAL_SECONDS) || 300) * 1000
     const isSlave = this.admin.isSlave && Boolean(this.env.PLATFORM_CLAIM_CODE?.trim())
     if (isSlave && now - this.lastSlaveReport >= slaveInterval) await this.reportToMaster(now)
+    if (this.env.BLOB && now - this.lastBlobSweep >= 3600_000) {
+      this.lastBlobSweep = now
+      await this.evictExpiredBlobs()
+    }
     this.mirror.flush()
     this.admin.flushMetrics()
 
@@ -553,13 +609,16 @@ export class Hub extends DurableObject<Env> {
         }
       }
       const rej = this.pluginRejected.get(instance)
-      if (rej && Date.now() - rej.at < 3600_000) {
+      const curMin = this.admin.minVersion
+      if (rej && Date.now() - rej.at < 3600_000 && curMin && (!rej.version || cmpVersion(rej.version, curMin) < 0)) {
         return json(503, {
-          ok: false, code: 'plugin_too_old', min: rej.min, have: rej.version,
-          error: `desktop plugin ${rej.version || '0.0.0'} is older than required ${rej.min}`,
+          ok: false, code: 'plugin_too_old', min: curMin, have: rej.version,
+          error: `desktop plugin ${rej.version || '0.0.0'} is older than required ${curMin}`,
         })
+      } else if (rej) {
+        this.pluginRejected.delete(instance)
       }
-      return json(503, { ok: false, error: 'host not connected' })
+      return json(503, { ok: false, error: 'that host is not connected to this relay' })
     }
     if (req.headers.get('upgrade')?.toLowerCase() === 'websocket') return this.phoneUpgrade(req, tun!, url)
     return this.forwardHttp(req, tun!, url, instance || tun!.att.instance, mirrorRead)
@@ -568,7 +627,7 @@ export class Hub extends DurableObject<Env> {
   private cleanHeaders(req: Request, ws = false) {
     const out: Record<string, string> = {}
     req.headers.forEach((v, k) => {
-      if (!forwardable(k) || k.startsWith('cf-') || k === 'x-aihub-colo' || k === 'x-aihub-country' || k === 'cdn-loop' || (ws && k.startsWith('sec-websocket-'))) return
+      if (!forwardable(k) || k.startsWith('cf-') || k === 'x-aihub-colo' || k === 'x-aihub-country' || k === 'cdn-loop' || k === 'x-real-ip' || (ws && k.startsWith('sec-websocket-') && k !== 'sec-websocket-protocol')) return
       out[k] = v
     })
     const ip = req.headers.get('cf-connecting-ip')
@@ -600,10 +659,10 @@ export class Hub extends DurableObject<Env> {
         evicted++
       }
       const totalSse = tunPend.filter(([, p]) => p.sse).length - evicted
-      if (totalSse >= MAX_SSE_CONNECTIONS) return Promise.resolve(json(429, { ok: false, error: 'too many sse connections' }))
+      if (totalSse >= MAX_SSE_CONNECTIONS) return Promise.resolve(json(429, { ok: false, error: 'too many sse connections' }, { 'retry-after': '25' }))
     }
     const activeCount = tunPend.length - evicted
-    if (activeCount >= MAX_PENDING) return Promise.resolve(json(429, { ok: false, error: 'too many pending requests' }))
+    if (activeCount >= MAX_PENDING) return Promise.resolve(json(429, { ok: false, error: 'too many pending requests' }, { 'retry-after': '25' }))
 
     const id = this.nextId()
     const creds = mirrorRead ? presentedCredentials(req) : []
@@ -612,15 +671,16 @@ export class Hub extends DurableObject<Env> {
     return new Promise<Response>(resolve => {
       const p: Pend = { tid, method: req.method, sse: isSse, device, created: Date.now(), resolve, headSent: false, paused: false, sent: 0 }
       p.timer = setTimeout(() => {
-        this.cancel(id)
-        if (!p.headSent) { p.headSent = true; resolve(json(504, { ok: false, error: 'upstream header timeout' })) }
+        this.cancel(id, 504, 'upstream header timeout')
       }, HEADER_TIMEOUT)
       if (mirrorRead && fallbackMs > 0) {
         p.fallbackTimer = setTimeout(async () => {
           if (p.headSent) return
           const hit = await this.mirror.lookup(instance, mirrorRead.kind, mirrorRead.rev, creds)
-          if (hit && !p.headSent) {
-            this.cancel(id)
+          if (hit && !p.headSent && this.pending.has(id)) {
+            this.pending.delete(id); clearTimeout(p.timer ?? null); clearTimeout(p.fallbackTimer ?? null)
+            const t = this.byTid(p.tid)
+            if (t) this.send(t.ws, encodeFrame(T.httpCancel, id))
             p.headSent = true
             this.admin.recordTraffic(instance, 0, 0, enc.encode(hit).byteLength, true)
             this.admin.flushMetrics()
@@ -641,12 +701,17 @@ export class Hub extends DurableObject<Env> {
             for (;;) {
               const { done, value } = await rd.read()
               if (done) break
+              if (!this.pending.has(id)) return
               p.sent += value.length
               this.admin.recordTraffic(instance, 0, value.length, 0)
               if (p.sent > MAX_BODY) { this.finishError(id, p, 'request body too large', 413); this.send(tun.ws, encodeFrame(T.httpCancel, id)); return }
-              for (let o = 0; o < value.length; o += CHUNK) this.send(tun.ws, encodeFrame(T.httpBody, id, value.subarray(o, o + CHUNK)))
+              for (let o = 0; o < value.length; o += CHUNK) {
+                if (!this.pending.has(id)) return
+                this.send(tun.ws, encodeFrame(T.httpBody, id, value.subarray(o, o + CHUNK)))
+              }
             }
           }
+          if (!this.pending.has(id)) return
           this.admin.recordTraffic(instance, 1, 0, 0)
           this.send(tun.ws, encodeFrame(T.httpBody, id))
         } catch { this.cancel(id) }
@@ -655,36 +720,53 @@ export class Hub extends DurableObject<Env> {
   }
 
   private phoneUpgrade(req: Request, tun: { ws: WebSocket; att: TAtt }, url: URL): Response {
+    const tunWs = this.ctx.getWebSockets('phone').filter(w => (w.deserializeAttachment() as PAtt | null)?.tid === tun.att.tid).length
+    if (tunWs >= MAX_WS_CONNECTIONS) return json(429, { ok: false, error: 'too many websocket connections' }, { 'retry-after': '25' })
     const id = this.nextId()
     const [client, server] = Object.values(new WebSocketPair())
     this.ctx.acceptWebSocket(server, ['phone', 'p' + id])
     server.serializeAttachment({ kind: 'phone', id, instance: tun.att.instance, tid: tun.att.tid } satisfies PAtt)
     this.wsState.set(id, { ready: false, queue: [] })
     this.send(tun.ws, jsonFrame(T.wsUpgrade, id, { path: routedPath(url.pathname, url.search), headers: this.cleanHeaders(req, true) }))
-    setTimeout(() => { if (this.wsState.get(id)?.ready === false) { this.wsState.delete(id); try { server.close(1013, 'host did not open ws') } catch { /* */ } } }, 15_000)
+    setTimeout(() => {
+      if (this.wsState.get(id)?.ready === false) {
+        this.wsState.delete(id)
+        const t = this.byTid(tun.att.tid)
+        if (t) {
+          const rb = enc.encode('host did not open ws')
+          const out = new Uint8Array(2 + rb.length)
+          new DataView(out.buffer).setUint16(0, 1013)
+          out.set(rb, 2)
+          this.send(t.ws, encodeFrame(T.wsClose, id, out))
+        }
+        try { server.close(1013, 'host did not open ws') } catch { /* */ }
+      }
+    }, 15_000)
     return new Response(null, { status: 101, webSocket: client })
   }
 
   private phoneMessage(ws: WebSocket, att: PAtt, msg: string | ArrayBuffer) {
     const t = this.byTid(att.tid)
     if (!t) { try { ws.close(1012, 'tunnel closed') } catch { /* */ } return }
+    const byteLen = typeof msg === 'string' ? enc.encode(msg).byteLength : msg.byteLength
+    if (byteLen > MAX_WS_MSG) { try { ws.close(1009, 'message too large') } catch { /* */ } return }
     const st = this.wsState.get(att.id)
     if (st && !st.ready) { if (st.queue.length < 256) st.queue.push(msg); return }
     this.send(t.ws, typeof msg === 'string' ? encodeFrame(T.wsText, att.id, msg) : encodeFrame(T.wsBinary, att.id, new Uint8Array(msg)))
   }
 
   // ---------- blobs (optional R2) ----------
-  private blobKey(inst: string, scope: string, key: string) { return `${inst}/${scope}/${key}` }
+  private blobKey(inst: string, scope: string, key: string) { return `${encodeURIComponent(inst)}/${scope}/${key}` }
 
   private async blobPut(att: TAtt, r: any) {
     const bucket = this.env.BLOB, sql = this.ctx.storage.sql
     if (!bucket || !att.reg || !att.instance || !r) return
-    const scope = r.scope, key = String(r.key ?? '')
+    const scope = r.scope, key = String(r.key ?? '').trim()
     if (!['messages', 'file'].includes(scope) || !key || key.length > 512) return
+    if (Array.isArray(r.creds) && r.creds.length > 200) return
     const parsedCreds: { hash: string; expiresAt: number }[] = []
     if (Array.isArray(r.creds)) {
       for (const c of r.creds) {
-        if (parsedCreds.length >= 200) break
         const rawHash = typeof c === 'string' ? c : c?.hash
         const hash = typeof rawHash === 'string' ? rawHash.trim().toLowerCase() : ''
         if (!/^[0-9a-f]{64}$/.test(hash)) continue
@@ -701,7 +783,7 @@ export class Hub extends DurableObject<Env> {
       sql.exec(`INSERT INTO blobs(instance,scope,k,creds,size,updated) VALUES(?,?,?,?,?,?)
         ON CONFLICT(instance,scope,k) DO UPDATE SET creds=excluded.creds,size=excluded.size,updated=excluded.updated`, att.instance, scope, key, creds, bytes.length, now)
       await this.blobEvict(att.instance)
-    } else {
+    } else if (r.cipher === '' && parsedCreds.length > 0) {
       sql.exec('UPDATE blobs SET creds=? WHERE instance=? AND scope=? AND k=?', creds, att.instance, scope, key)
     }
   }
@@ -709,23 +791,41 @@ export class Hub extends DurableObject<Env> {
   private async blobDelete(att: TAtt, r: any) {
     const bucket = this.env.BLOB
     if (!bucket || !att.reg || !att.instance || !r || !['messages', 'file'].includes(r.scope)) return
-    const keys: string[] = Array.isArray(r.keys) ? r.keys.map(String) : r.key ? [String(r.key)] : []
-    for (const k of keys.slice(0, 500)) {
-      await bucket.delete(this.blobKey(att.instance, r.scope, k))
+    const keys: string[] = (Array.isArray(r.keys) ? r.keys : r.key ? [r.key] : [])
+      .map((x: unknown) => String(x ?? '').trim())
+      .filter(Boolean)
+      .slice(0, 500)
+    if (!keys.length) return
+    await this.deleteR2Keys(bucket, keys.map(k => this.blobKey(att.instance, r.scope, k)))
+    for (const k of keys) {
       this.ctx.storage.sql.exec('DELETE FROM blobs WHERE instance=? AND scope=? AND k=?', att.instance, r.scope, k)
+    }
+  }
+
+  private async evictExpiredBlobs() {
+    const bucket = this.env.BLOB
+    if (!bucket) return
+    const sql = this.ctx.storage.sql
+    const rows = sql.exec('SELECT instance,scope,k FROM blobs WHERE updated<? LIMIT 100', Date.now() - BLOB_TTL).toArray()
+    if (!rows.length) return
+    await this.deleteR2Keys(bucket, rows.map(o => this.blobKey(String(o.instance), String(o.scope), String(o.k))))
+    for (const o of rows) {
+      sql.exec('DELETE FROM blobs WHERE instance=? AND scope=? AND k=?', o.instance, o.scope, o.k)
+      this.blobEvicted++
     }
   }
 
   private async blobEvict(instance: string) {
     const bucket = this.env.BLOB!, sql = this.ctx.storage.sql
     const drop = async (rows: Record<string, any>[]) => {
+      if (!rows.length) return
+      await this.deleteR2Keys(bucket, rows.map(o => this.blobKey(String(o.instance), String(o.scope), String(o.k))))
       for (const o of rows) {
-        await bucket.delete(this.blobKey(String(o.instance), String(o.scope), String(o.k)))
         sql.exec('DELETE FROM blobs WHERE instance=? AND scope=? AND k=?', o.instance, o.scope, o.k)
         this.blobEvicted++
       }
     }
-    await drop(sql.exec('SELECT instance,scope,k FROM blobs WHERE updated<? LIMIT 100', Date.now() - BLOB_TTL).toArray())
+    await this.evictExpiredBlobs()
     let total = Number(sql.exec('SELECT COALESCE(SUM(size),0) c FROM blobs WHERE instance=?', instance).toArray()[0]?.c ?? 0)
     while (total > MAX_BLOB_INSTANCE) {
       const old = sql.exec('SELECT instance,scope,k,size FROM blobs WHERE instance=? ORDER BY updated LIMIT 10', instance).toArray()
@@ -745,9 +845,10 @@ export class Hub extends DurableObject<Env> {
     const raw = presentedCredentials(req)
     const row = this.ctx.storage.sql.exec('SELECT creds,updated FROM blobs WHERE instance=? AND scope=? AND k=?', instance, scope, key).toArray()[0]
     if (!row || !raw.length) return notFound()
+    const now = Date.now()
+    if (now - Number(row.updated) >= BLOB_TTL) return notFound()
     const hashes = await Promise.all(raw.map(sha256Hex))
     const creds = JSON.parse(String(row.creds)) as { hash: string; expiresAt: number }[]
-    const now = Date.now()
     if (!creds.some(c => hashes.includes(c.hash) && (!c.expiresAt || c.expiresAt > now))) return notFound()
     const obj = await bucket.get(this.blobKey(instance, scope, key))
     if (!obj) return notFound()

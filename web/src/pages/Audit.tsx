@@ -6,6 +6,7 @@ import { actionTone, Badge, Card, EmptyState, Pagination, SortState, SortTh, use
 export function Audit() {
   const toast = useToast()
   const [items, setItems] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
   const [q, setQ] = useState('')
   const [cat, setCat] = useState('all')
   const [sort, setSort] = useState<SortState>({ field: 'created', dir: 'desc' })
@@ -16,7 +17,7 @@ export function Audit() {
     try {
       const r = await api<{ items: any[] }>('/audit')
       setItems(r.items)
-    } catch (e: any) { toast(e.message, 'error') }
+    } catch (e: any) { toast(e.message, 'error') } finally { setLoading(false) }
   }, [toast])
 
   useEffect(() => { load() }, [load])
@@ -34,12 +35,18 @@ export function Audit() {
   const curPage = Math.min(page, totalPages)
   const paged = filtered.slice((curPage - 1) * pageSize, curPage * pageSize)
 
+  const csvCell = (v: unknown) => {
+    const raw = String(v ?? '')
+    const safe = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw
+    return `"${safe.replace(/"/g, '""')}"`
+  }
+
   const exportFile = (fmt: 'csv' | 'json') => {
     const content = fmt === 'json'
       ? JSON.stringify(filtered, null, 2)
-      : ['id,action,actor,target,detail,created', ...filtered.map(a =>
+      : '\uFEFF' + ['id,action,actor,target,detail,created', ...filtered.map(a =>
           [a.id, a.action, a.actor, a.target, a.detail, new Date(a.created).toISOString()]
-            .map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','),
+            .map(csvCell).join(','),
         )].join('\n')
     const blob = new Blob([content], { type: fmt === 'json' ? 'application/json;charset=utf-8' : 'text/csv;charset=utf-8' })
     const url = URL.createObjectURL(blob)
@@ -55,7 +62,7 @@ export function Audit() {
         <div className="btn-row">
           <button className="btn-ghost btn-sm" disabled={!filtered.length} onClick={() => exportFile('csv')}><Download size={14} />CSV</button>
           <button className="btn-ghost btn-sm" disabled={!filtered.length} onClick={() => exportFile('json')}><Download size={14} />JSON</button>
-          <button className="icon-btn" onClick={load} title="刷新"><RefreshCw size={14} /></button>
+          <button className="icon-btn" onClick={load} title="刷新" aria-label="刷新审计日志"><RefreshCw size={14} /></button>
         </div>
       }>
       <div className="toolbar">
@@ -65,16 +72,24 @@ export function Audit() {
         </div>
         <select value={cat} onChange={e => { setCat(e.target.value); setPage(1) }} style={{ width: 150 }}>
           <option value="all">全部类别</option>
-          <option value="auth.">登录与安全</option>
+          <option value="auth.">登录与 2FA</option>
+          <option value="admin.">管理员账号</option>
           <option value="license.">激活码</option>
-          <option value="tunnel.">隧道</option>
+          <option value="device.">设备绑定</option>
+          <option value="tunnel.">隧道连接</option>
+          <option value="instance.">宿主实例</option>
+          <option value="migration.">迁移台账</option>
+          <option value="mirror.">离线镜像</option>
+          <option value="blob.">R2 密文</option>
+          <option value="push.">APNs 推送</option>
           <option value="webhook.">Webhook</option>
           <option value="ota.">OTA 分发</option>
           <option value="node.">节点联邦</option>
+          <option value="monitor.">监控令牌</option>
           <option value="settings.">系统设置</option>
         </select>
       </div>
-      {paged.length === 0 ? <EmptyState icon={<ScrollText size={24} />} title="暂无审计日志" /> : (
+      {loading ? <p className="muted pad">读取审计日志…</p> : paged.length === 0 ? <EmptyState icon={<ScrollText size={24} />} title="暂无审计日志" /> : (
         <>
           <div className="table">
             <div className="tr t-aud th">
