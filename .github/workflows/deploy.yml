@@ -44,8 +44,9 @@ jobs:
             }
             const target = (process.env.TARGET_NAME || "").trim();
             const items = list
-              .map((n, index) => ({ index, name: String((n && n.WORKER_NAME) || `node-${index + 1}`) }))
-              .filter(x => !target || x.name === target);
+              .map((n, i) => ({ i, _name: String((n && n.WORKER_NAME) || `node-${i + 1}`) }))
+              .filter(x => !target || x._name === target)
+              .map(({ i }) => ({ i }));
             if (items.length === 0) {
               console.error(`No node matched target="${target}"`);
               process.exit(1);
@@ -73,8 +74,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(needs.build.outputs.matrix) }}
-    name: Deploy (${{ matrix.name }})
+        include: ${{ fromJson(needs.build.outputs.matrix || '[]') }}
+    name: Deploy (node-${{ matrix.i }})
     steps:
       - uses: actions/checkout@v4
 
@@ -93,7 +94,7 @@ jobs:
       - name: Write node env.json & deploy
         env:
           CLUSTER_NODES_JSON: ${{ secrets.CLUSTER_NODES_JSON }}
-          NODE_INDEX: ${{ matrix.index }}
+          NODE_INDEX: ${{ matrix.i }}
           SKIP_INSTALL: '1'
         run: |
           node -e '
