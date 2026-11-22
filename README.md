@@ -152,7 +152,11 @@ node scripts/deploy-cluster.mjs slave        # 仅部署指定节点
    ]
    ```
 
-2. 在仓库 **Actions → Deploy Cluster → Run workflow** 手动触发；留空 `target` 并行部署全部节点，填写某个 `WORKER_NAME` 则仅部署该节点。
+2. **可选代理配置**：若 GitHub Actions 共享 IP 触发 Cloudflare API 限流（`code: 10429`），可新增 **`DEPLOY_PROXY`** Secret（或在手动触发时填写 `proxy` 输入框），**一行一个**，支持以下格式（自动取第一条有效代理）：
+   - `vless://...`（自动在 Runner 内拉起本地代理通道）
+   - `socks5://user:pass@host:port` 或 `socks5://host:port`
+   - `http://host:port` / `https://host:port` / `ip:port`
+3. 在仓库 **Actions → Deploy Cluster → Run workflow** 手动触发；留空 `target` 部署全部节点，填写某个 `WORKER_NAME` 则仅部署该节点。
 
 `scripts/deploy.mjs` 按顺序完成 6 个步骤：
 

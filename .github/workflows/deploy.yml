@@ -7,6 +7,10 @@ on:
         description: '可选：仅部署指定 WORKER_NAME（留空则部署全部节点）'
         required: false
         default: ''
+      proxy:
+        description: '可选：临时代理（一行一个，支持 vless:// / socks5:// / http:// / ip:port；留空则读 DEPLOY_PROXY Secret）'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -20,6 +24,95 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+
+      - name: Setup proxy (optional)
+        env:
+          PROXY_RAW: ${{ inputs.proxy || secrets.DEPLOY_PROXY }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const net = require("net");
+            const { execSync, spawn } = require("child_process");
+            const lines = (process.env.PROXY_RAW || "")
+              .split(/\r?\n/)
+              .map(s => s.trim())
+              .filter(s => s && !s.startsWith("#"));
+            if (lines.length === 0) {
+              console.log("No proxy configured.");
+              process.exit(0);
+            }
+            const line = lines[0];
+            const setProxyEnv = (url) => {
+              fs.appendFileSync(process.env.GITHUB_ENV, `HTTP_PROXY=${url}\nHTTPS_PROXY=${url}\n`);
+              console.log("Proxy enabled:", url.replace(/\/\/[^@]+@/, "//***@"));
+            };
+            if (/^(https?|socks5h?|socks4a?|socks):\/\//i.test(line)) {
+              setProxyEnv(line);
+              process.exit(0);
+            }
+            if (/^(\[[^\]]+\]|[^:/\s]+):\d{1,5}$/.test(line)) {
+              setProxyEnv(`http://${line}`);
+              process.exit(0);
+            }
+            if (/^vless:\/\//i.test(line)) {
+              const u = new URL(line);
+              const q = u.searchParams;
+              const uuid = decodeURIComponent(u.username);
+              const server = u.hostname;
+              const port = Number(u.port || 443);
+              const security = q.get("security") || "none";
+              const netType = q.get("type") || "tcp";
+              const streamSettings = { network: netType, security };
+              if (security === "tls") {
+                streamSettings.tlsSettings = {
+                  serverName: q.get("sni") || q.get("host") || server,
+                  fingerprint: q.get("fp") || "chrome",
+                  allowInsecure: q.get("allowInsecure") === "1",
+                };
+              }
+              if (netType === "ws") {
+                streamSettings.wsSettings = {
+                  path: q.get("path") || "/",
+                  headers: q.get("host") ? { Host: q.get("host") } : {},
+                };
+              }
+              const cfg = {
+                log: { loglevel: "warning" },
+                inbounds: [{ listen: "127.0.0.1", port: 10808, protocol: "http" }],
+                outbounds: [{
+                  protocol: "vless",
+                  settings: {
+                    vnext: [{
+                      address: server,
+                      port,
+                      users: [{ id: uuid, encryption: q.get("encryption") || "none" }],
+                    }],
+                  },
+                  streamSettings,
+                }],
+              };
+              fs.writeFileSync("/tmp/xray.json", JSON.stringify(cfg, null, 2));
+              execSync("curl -fsSL -o /tmp/xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip && unzip -q -o /tmp/xray.zip xray -d /tmp/xray-bin && chmod +x /tmp/xray-bin/xray", { stdio: "inherit" });
+              const child = spawn("/tmp/xray-bin/xray", ["run", "-c", "/tmp/xray.json"], { detached: true, stdio: "ignore" });
+              child.unref();
+              (async () => {
+                for (let i = 0; i < 20; i++) {
+                  await new Promise(r => setTimeout(r, 300));
+                  const ok = await new Promise(res => {
+                    const s = net.connect(10808, "127.0.0.1", () => { s.destroy(); res(true); });
+                    s.on("error", () => res(false));
+                  });
+                  if (ok) {
+                    setProxyEnv("http://127.0.0.1:10808");
+                    process.exit(0);
+                  }
+                }
+                throw new Error("xray local proxy failed to start on 127.0.0.1:10808");
+              })();
+            } else {
+              throw new Error("Unsupported proxy format");
+            }
+          '
 
       - name: Install dependencies & build admin console
         run: |
@@ -53,4 +146,6 @@ jobs:
 
       - name: Clean up sensitive files
         if: always()
-        run: rm -f env.json deploy-output.json worker/.secrets.tmp.json
+        run: |
+          pkill -f /tmp/xray-bin/xray || true
+          rm -f env.json deploy-output.json worker/.secrets.tmp.json /tmp/xray.json /tmp/xray.zip
