@@ -27,6 +27,18 @@
                                                      └─ APNs 离线推送 + 7 渠道 SSRF 防护 Webhook 告警
 ```
 
+## 控制台预览
+
+| 概览 | 在线隧道 |
+| :---: | :---: |
+| ![概览](./docs/screenshots/overview.jpg) | ![在线隧道](./docs/screenshots/tunnels.jpg) |
+| **存储与推送** | **审计日志** |
+| ![存储与推送](./docs/screenshots/storage-push.png) | ![审计日志](./docs/screenshots/audit-logs.jpg) |
+| **准入与激活码** | **节点联邦** |
+| ![准入与激活码](./docs/screenshots/admission-codes.png) | ![节点联邦](./docs/screenshots/federation.png) |
+| **插件 OTA** | **系统设置** |
+| ![插件 OTA](./docs/screenshots/plugin-ota.png) | ![系统设置](./docs/screenshots/settings.jpg) |
+
 ## 功能
 
 ### 隧道与路由
