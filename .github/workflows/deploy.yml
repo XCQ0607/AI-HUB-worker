@@ -137,6 +137,10 @@ jobs:
             if (nodes.length === 0) throw new Error(`No node matched target="${target}"`);
             for (let i = 0; i < nodes.length; i++) {
               const n = nodes[i];
+              for (const k of ["PUBLIC_BASE_URL", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_EMAIL", "CLOUDFLARE_API_KEY", "CLOUDFLARE_API_TOKEN", "ADMIN_EMAIL", "ADMIN_PASSWORD", "ADMIN_TOKEN", "PLATFORM_MASTER_URL", "PLATFORM_CLAIM_CODE"]) {
+                const v = n && n[k] ? String(n[k]).trim() : "";
+                if (v) console.log(`::add-mask::${v}`);
+              }
               const name = (n && n.WORKER_NAME) || `node-${i + 1}`;
               console.log(`\n=== Deploying [${name}] ===`);
               fs.writeFileSync("env.json", JSON.stringify(n, null, 2));
