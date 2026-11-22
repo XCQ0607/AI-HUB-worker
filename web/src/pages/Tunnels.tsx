@@ -180,7 +180,7 @@ export function Tunnels() {
                       : <Badge tone="neutral">离线</Badge>}
                   </span>
                   <span data-label="插件版本">{t.version ? <Badge tone="accent">{t.version}</Badge> : '—'}</span>
-                  <span className="muted" data-label="来源 IP">{t.ip || '—'}</span>
+                  <span className="muted ellipsis" data-label="来源 IP" title={t.ip || ''}>{t.ip || '—'}</span>
                   <span className="muted" data-label="最近活跃">{t.online ? `${ago(t.connectedAt)}连入` : ago(t.lastSeen)}</span>
                   <span className="actions" onClick={e => e.stopPropagation()}>
                     {t.online

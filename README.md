@@ -80,6 +80,45 @@ npx wrangler login                 # 若使用 OAuth 登录；改用 API Token /
 node scripts/deploy.mjs
 ```
 
+### 认证方式（三选一）
+
+`deploy.mjs` 按以下优先级自动选择 Cloudflare 认证方式：
+
+1. **API Token（推荐用于 CI / 自动化）**：在 `env.json` 填写 `CLOUDFLARE_API_TOKEN`。
+   - 前往 Cloudflare Dashboard → **My Profile → API Tokens → Create Custom Token**，授予以下最小权限：
+     - `Account` → `Workers Scripts` → `Edit`
+     - `Account` → `Workers R2 Storage` → `Edit`（不使用 R2 可不给）
+     - `Account` → `Account Settings` → `Read`（用于自动探测 Account ID）
+     - `Zone` / `Account` → `Workers Routes` 或 `Custom Domains: Read`（可选；用于自动识别已绑定的自定义域名）
+2. **Global API Key**：留空 `CLOUDFLARE_API_TOKEN`，填写 `CLOUDFLARE_EMAIL` + `CLOUDFLARE_API_KEY`。
+   - 可在 Cloudflare Dashboard → **My Profile → API Tokens → Global API Key** 查看（拥有账号完整权限，仅建议本地使用）。
+3. **Wrangler OAuth（最省事，适合本地）**：上述三项全留空，提前在终端运行 `npx --prefix worker wrangler login` 登录。
+   - 如需在本地同时管理**多个 Cloudflare 账号**，可使用 Wrangler 原生 Profile 隔离：
+     ```bash
+     npx --prefix worker wrangler auth create master   # 登录第一个账号
+     npx --prefix worker wrangler auth create slave    # 登录第二个账号
+     ```
+     部署时传入 `--profile master`（或在批量配置 `deploy.json` 中指定 `profile`）。
+
+### 多节点批量部署（`deploy.json`）
+
+> `deploy.json` 只负责列出「要部署哪些节点及其 `envFile` / `profile`」，每个节点的具体参数（Worker 名称、区域、密钥、主控地址等）依然写在各自的 `env*.json` 中；单节点用户无需创建 `deploy.json`。
+
+如需一键部署多个节点（例如主控端 + 多个海外被控端），可复制 `deploy-template.json` 为 `deploy.json`（已被 `.gitignore`），为每个节点指定对应的 `envFile` 与可选 `profile`：
+
+```bash
+cp deploy-template.json deploy.json
+node scripts/deploy-cluster.mjs              # 依次部署 deploy.json 中的全部节点
+node scripts/deploy-cluster.mjs slave        # 仅部署指定节点
+```
+
+### GitHub Actions 自动并行部署
+
+仓库内置了 [.github/workflows/deploy.yml](.github/workflows/deploy.yml)（**Deploy Cluster**），构建一次前端后通过 `strategy.matrix` 并行部署所有节点：
+
+1. 在 GitHub 仓库 **Settings → Secrets and variables → Actions → Secrets** 新增 **`CLUSTER_NODES_JSON`**，值为一个 JSON 数组，每个元素对应一个节点的 `env.json` 配置（需填写 `CLOUDFLARE_API_TOKEN` 与固定 `ADMIN_TOKEN`）。
+2. 在仓库 **Actions → Deploy Cluster → Run workflow** 手动触发；留空 `target` 并行部署全部节点，填写某个 `WORKER_NAME` 则仅部署该节点。
+
 `scripts/deploy.mjs` 按顺序完成 6 个步骤：
 
 1. **依赖与前端构建**：在 `worker/`、`web/` 安装依赖，并构建 React 管理控制台到 `worker/public/platform/`（二次部署可传 `SKIP_INSTALL=1` 跳过安装）。

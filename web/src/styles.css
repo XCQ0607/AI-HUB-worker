@@ -160,7 +160,7 @@ label.chk-row { flex-direction: row; align-items: center; gap: 8px; color: var(-
 .tr.clickable { cursor: pointer; border-radius: 8px; }
 .tr.clickable:hover, .tr.clickable:focus-visible { background: var(--panel-2); outline: none; }
 .tr.clickable:focus-visible { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent); }
-.t-tun { grid-template-columns: 26px 1.6fr 1.1fr .7fr .9fr .9fr 76px; }
+.t-tun { grid-template-columns: 26px 1.5fr 1fr .65fr 1.2fr .85fr 68px; }
 .t-lic { grid-template-columns: 26px 1.4fr .6fr .8fr .8fr .9fr .7fr 150px; }
 .t-mig { grid-template-columns: 1.5fr 2fr .9fr 70px; }
 .t-mir { grid-template-columns: 1.6fr 1fr .6fr .7fr .8fr 50px; }

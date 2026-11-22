@@ -15,6 +15,7 @@ wrangler.generated.json
 .env
 .env.*
 env*.json
+deploy.json
 deploy-output.json
 .secrets.tmp.json
 

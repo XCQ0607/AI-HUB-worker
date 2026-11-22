@@ -1,0 +1,20 @@
+{
+  "_说明": "复制为 deploy.json 后按需修改，再运行 node scripts/deploy-cluster.mjs（或 npm run deploy:cluster）批量部署多节点。deploy.json 已被 .gitignore。",
+  "_认证方式": [
+    "方式 1（推荐 CI / 自动化）：在各节点对应的 env*.json 中填写 CLOUDFLARE_API_TOKEN（最小权限：Workers Scripts Edit + Workers R2 Storage Edit + Account Settings Read）。",
+    "方式 2（Global API Key）：在各节点对应的 env*.json 中填写 CLOUDFLARE_EMAIL + CLOUDFLARE_API_KEY（需同时留空 CLOUDFLARE_API_TOKEN）。",
+    "方式 3（本地多账号 OAuth 隔离）：env*.json 中认证字段全留空，先在终端运行 npx --prefix worker wrangler auth create <profile名> 登录对应账号，再在下方节点的 profile 字段填写该名称。"
+  ],
+  "nodes": [
+    {
+      "name": "master",
+      "envFile": "env.json",
+      "profile": "master"
+    },
+    {
+      "name": "slave",
+      "envFile": "env2.json",
+      "profile": "slave"
+    }
+  ]
+}

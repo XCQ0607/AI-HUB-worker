@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Download, RefreshCw, ScrollText, Search } from 'lucide-react'
 import { api, fmtTime } from '../api'
-import { actionTone, Badge, Card, EmptyState, Pagination, Select, SortState, SortTh, useToast } from '../components/ui'
+import { actionLabel, actionTone, Badge, Card, EmptyState, Pagination, Select, SortState, SortTh, useToast } from '../components/ui'
 
 export function Audit() {
   const toast = useToast()
@@ -105,7 +105,7 @@ export function Audit() {
             </div>
             {paged.map(a => (
               <div className="tr t-aud" key={a.id}>
-                <span data-label="动作"><Badge tone={actionTone(a.action)}>{a.action}</Badge></span>
+                <span data-label="动作" title={a.action}><Badge tone={actionTone(a.action)}>{actionLabel(a.action)}</Badge></span>
                 <span className="muted" data-label="操作人">{a.actor}</span>
                 <code data-label="目标">{a.target || '—'}</code>
                 <span className="muted" data-label="详情">{a.detail || '—'}</span>

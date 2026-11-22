@@ -166,6 +166,57 @@ export function Badge({ tone = 'neutral', dot = false, icon, children }: {
   return <span className={`badge badge-${tone}`}>{dot && <i className="b-dot" />}{icon}{children}</span>
 }
 
+const ACTION_LABELS: Record<string, string> = {
+  'auth.login': '管理员登录',
+  'auth.totp.enable': '开启两步验证',
+  'auth.totp.disable': '关闭两步验证',
+  'admin.bootstrap': '初始化管理员',
+  'admin.password': '修改密码',
+  'tunnel.kick': '断开隧道',
+  'instance.delete': '删除宿主实例',
+  'license.create': '生成激活码',
+  'license.renew': '续期激活码',
+  'license.delete': '删除激活码',
+  'license.toggle': '切换激活码状态',
+  'license.unbind': '解绑激活码设备',
+  'license.batch.enable': '批量启用激活码',
+  'license.batch.disable': '批量停用激活码',
+  'license.batch.delete': '批量删除激活码',
+  'device.unbind': '解绑设备',
+  'node.create': '生成节点认领码',
+  'node.mode': '切换节点准入模式',
+  'node.forget': '遗忘节点',
+  'node.revoke': '移除节点',
+  'mirror.clear': '清理离线镜像',
+  'blob.clear': '清理 R2 密文',
+  'push.delete': '删除推送设备',
+  'push.test': '测试 APNs 推送',
+  'ota.publish': '发布 OTA 版本',
+  'ota.delete': '删除 OTA 版本',
+  'webhook.create': '创建 Webhook 渠道',
+  'webhook.update': '更新 Webhook 渠道',
+  'webhook.delete': '删除 Webhook 渠道',
+  'webhook.test': '测试 Webhook 推送',
+  'webhook.logs.clear': '清空 Webhook 日志',
+  'webhook.alerts.update': '更新告警规则',
+  'webhook.batch.enable': '批量启用 Webhook',
+  'webhook.batch.disable': '批量停用 Webhook',
+  'webhook.batch.delete': '批量删除 Webhook',
+  'migration.set': '设置迁移台账',
+  'migration.delete': '删除迁移台账',
+  'monitor.token.create': '创建监控令牌',
+  'monitor.token.delete': '删除监控令牌',
+  'settings.mode': '修改准入模式',
+  'settings.minVersion': '修改最低插件版本',
+  'settings.mirror': '修改离线镜像开关',
+  'settings.mirrorFallbackMs': '修改镜像回退超时',
+  'settings.heartbeatMs': '修改心跳超时',
+}
+
+export function actionLabel(action: string): string {
+  return ACTION_LABELS[action] ?? action
+}
+
 export function actionTone(action: string): BadgeTone {
   if (action.startsWith('auth.') || action.startsWith('admin.')) return 'purple'
   if (action.includes('delete') || action.includes('kick') || action.includes('revoke') || action.includes('clear') || action.includes('forget')) return 'bad'

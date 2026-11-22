@@ -13,6 +13,7 @@
     "dev": "npm --prefix worker run dev",
     "protocol:sync": "node scripts/sync-protocol.mjs sync",
     "protocol:check": "node scripts/sync-protocol.mjs check",
-    "deploy": "node scripts/deploy.mjs"
+    "deploy": "node scripts/deploy.mjs",
+    "deploy:cluster": "node scripts/deploy-cluster.mjs"
   }
 }
