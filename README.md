@@ -116,7 +116,42 @@ node scripts/deploy-cluster.mjs slave        # 仅部署指定节点
 
 仓库内置了 [.github/workflows/deploy.yml](.github/workflows/deploy.yml)（**Deploy Cluster**），构建一次前端后通过 `strategy.matrix` 并行部署所有节点：
 
-1. 在 GitHub 仓库 **Settings → Secrets and variables → Actions → Secrets** 新增 **`CLUSTER_NODES_JSON`**，值为一个 JSON 数组，每个元素对应一个节点的 `env.json` 配置（需填写 `CLOUDFLARE_API_TOKEN` 与固定 `ADMIN_TOKEN`）。
+1. 在 GitHub 仓库 **Settings → Secrets and variables → Actions → Secrets** 新增 **`CLUSTER_NODES_JSON`**，值为一个 JSON 数组，每个元素对应一个节点的 `env.json` 配置（需填写 `CLOUDFLARE_API_TOKEN` 与固定 `ADMIN_TOKEN`），模板如下：
+
+   ```json
+   [
+     {
+       "CLOUDFLARE_API_TOKEN": "主控端账号的_API_Token",
+       "CLOUDFLARE_ACCOUNT_ID": "主控端_Account_ID",
+       "WORKER_NAME": "ai-hub-relay",
+       "PUBLIC_BASE_URL": "https://master.example.com",
+       "ADMIN_EMAIL": "admin@example.com",
+       "ADMIN_PASSWORD": "change-this-password-min-12",
+       "ADMIN_TOKEN": "change-this-admin-token-min-16",
+       "ENABLE_R2": "1",
+       "R2_BUCKET": "ai-hub-blob",
+       "ADMISSION_MODE": "open"
+     },
+     {
+       "CLOUDFLARE_API_TOKEN": "被控端账号的_API_Token",
+       "CLOUDFLARE_ACCOUNT_ID": "被控端_Account_ID",
+       "WORKER_NAME": "ai-hub-relay-apac",
+       "PUBLIC_BASE_URL": "https://slave.example.com",
+       "DO_LOCATION": "apac",
+       "ADMIN_EMAIL": "admin@example.com",
+       "ADMIN_PASSWORD": "change-this-password-min-12",
+       "ADMIN_TOKEN": "change-this-admin-token-min-16",
+       "ENABLE_R2": "1",
+       "R2_BUCKET": "ai-hub-blob",
+       "ADMISSION_MODE": "open",
+       "PLATFORM_MASTER_URL": "https://master.example.com",
+       "PLATFORM_CLAIM_CODE": "NODE-XXXX-XXXX",
+       "PLATFORM_NODE_NAME": "apac-node",
+       "PLATFORM_REPORT_INTERVAL_SECONDS": "300"
+     }
+   ]
+   ```
+
 2. 在仓库 **Actions → Deploy Cluster → Run workflow** 手动触发；留空 `target` 并行部署全部节点，填写某个 `WORKER_NAME` 则仅部署该节点。
 
 `scripts/deploy.mjs` 按顺序完成 6 个步骤：
