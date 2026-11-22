@@ -1,7 +1,7 @@
 {
   "upstream": "WNLUO/dsh-mobile-server",
-  "commit": "2bfb5b82e43e91d24b0cfdd30f4e1a81eb276c4e",
-  "relayVersion": "0.1.27",
+  "commit": "e729dd85c2d62d7100eb3c3fd0f2d0f62340ba4c",
+  "relayVersion": "0.1.30",
   "headerLen": 9,
   "mobilePrefix": "/api/mobile/v1/",
   "ownedPaths": [

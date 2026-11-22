@@ -171,10 +171,12 @@ jobs:
           rm -rf stage out
           mkdir -p "stage/${NAME}-${VERSION}"
 
-          # 1) 可部署包：worker（含已构建的 public）+ 一键部署/校验脚本 + 模板与文档
+          # 1) 可部署包：worker（含已构建的 public）+ 部署脚本 + 模板与文档
           rsync -a "${EXCLUDES[@]}" worker "stage/${NAME}-${VERSION}/"
+          # 可部署包只带部署脚本：协议校验依赖 .github/upstream-baseline.json 与 reference/，
+          # 这两者都不在可部署包里，sync-reference.mjs 在此处跑只会报缺文件。
           mkdir -p "stage/${NAME}-${VERSION}/scripts"
-          cp scripts/deploy.mjs scripts/sync-reference.mjs "stage/${NAME}-${VERSION}/scripts/"
+          cp scripts/deploy.mjs "stage/${NAME}-${VERSION}/scripts/"
           cp package.json env-template.json README.md LICENSE "stage/${NAME}-${VERSION}/"
           if [ -f changelog.md ]; then cp changelog.md "stage/${NAME}-${VERSION}/"; fi
 
@@ -182,6 +184,8 @@ jobs:
           rsync -a "stage/${NAME}-${VERSION}/" "stage/${NAME}-${VERSION}-src/"
           rsync -a "${EXCLUDES[@]}" web "stage/${NAME}-${VERSION}-src/"
           rsync -a "${EXCLUDES[@]}" .github "stage/${NAME}-${VERSION}-src/"
+          # 协议校验脚本只进源码包：它需要 .github/upstream-baseline.json（已随 .github 拷入）。
+          cp scripts/sync-reference.mjs "stage/${NAME}-${VERSION}-src/scripts/"
 
           mkdir -p out
           (cd stage && zip -qr "../out/${NAME}-${VERSION}.zip" "${NAME}-${VERSION}")

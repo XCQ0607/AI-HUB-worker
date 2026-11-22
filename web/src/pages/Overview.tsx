@@ -112,7 +112,7 @@ export function Overview({ onNav }: { onNav: (tab: any) => void }) {
     })
     setDiagSteps([...steps])
     setProbing(false)
-    toast(steps.every(s => s.ok) ? '三步诊断全部通过' : '诊断发现异常，请查看详情', steps.every(s => s.ok) ? 'success' : 'error')
+    toast(steps.every(s => s.ok) ? '诊断全部通过' : '诊断发现异常，请查看详情', steps.every(s => s.ok) ? 'success' : 'error')
   }
 
   const origin = location.origin
@@ -140,7 +140,7 @@ export function Overview({ onNav }: { onNav: (tab: any) => void }) {
           <Badge tone={o.online > 0 ? 'ok' : 'neutral'} dot>{o.online > 0 ? `${o.online} 台宿主在线` : '等待宿主连入'}</Badge>
         </div>
         <div className="btn-row">
-          <button className="btn-primary btn-sm" onClick={openWizard}><Compass size={14} />零门槛接入向导</button>
+          <button className="btn-primary btn-sm" onClick={openWizard}><Compass size={14} />接入向导</button>
           <button className="icon-btn" onClick={load} title="刷新" aria-label="刷新概览"><RefreshCw size={14} /></button>
         </div>
       </div>
@@ -160,7 +160,7 @@ export function Overview({ onNav }: { onNav: (tab: any) => void }) {
           hint={o.blob?.enabled ? bytes(o.blob.bytes) : '部署时 ENABLE_R2=1 启用'}
           icon={<Database size={16} className="muted" />} />
         <StatCard label="APNs 离线推送" value={o.apns?.enabled ? `${o.apns.tokens} 台` : '未配置'} onClick={() => onNav('storage')}
-          hint={o.apns?.enabled ? 'ES256 推送通道就绪' : '可改用 Webhook 桥接'}
+          hint={o.apns?.enabled ? '推送密钥已配置' : '可改用 Webhook 桥接'}
           icon={<Bell size={16} className="muted" />} />
         <StatCard label="节点联邦" value={o.role === 'slave' ? '被控端' : `${o.nodes?.online ?? 0} / ${o.nodes?.total ?? 0}`} onClick={() => onNav('nodes')}
           hint={o.role === 'slave' ? (o.masterLastError ? '上报异常' : o.masterLastReportAt ? '已挂载主控端' : '待首次上报（需配置认领码）') : '在线 / 全部被控节点'}
@@ -171,7 +171,7 @@ export function Overview({ onNav }: { onNav: (tab: any) => void }) {
       </div>
 
       <div className="two-col">
-        <Card title="24 小时流量遥测 (UTC)" subtitle={tel ? `累计 ${tel.quota.todayReqs} 次请求 · 悬停、点击或聚焦柱条查看详情` : '加载遥测中…'}>
+        <Card title="24 小时流量遥测 (UTC)" subtitle={tel ? `累计 ${tel.quota.todayReqs} 次请求` : '加载遥测中…'}>
           {!tel ? <p className="muted small">暂无遥测数据</p> : (() => {
             const maxR = Math.max(1, ...tel.hours.map(h => h.reqs))
             const totalBytes = tel.hours.reduce((a, h) => a + h.bytesIn + h.bytesOut, 0)
@@ -185,7 +185,7 @@ export function Overview({ onNav }: { onNav: (tab: any) => void }) {
                       {hovered.label} · {hovered.reqs} reqs · 镜像 {hovered.mirrorHits} · {bytes(hovered.bytesIn + hovered.bytesOut)}
                     </Badge>
                   ) : (
-                    <span className="muted small">悬停、点击或使用键盘聚焦柱条查看各时段请求与镜像命中详情</span>
+                    <span className="muted small">悬停或聚焦柱条查看各时段明细</span>
                   )}
                 </div>
                 <svg viewBox="0 0 480 128" style={{ width: '100%', height: 136, display: 'block' }} onMouseLeave={() => setHoverIdx(null)} role="img" aria-label="24 小时流量遥测柱状图">
@@ -226,7 +226,7 @@ export function Overview({ onNav }: { onNav: (tab: any) => void }) {
           })()}
         </Card>
 
-        <Card title="Cloudflare 免费额度与高流量宿主" subtitle="Workers 100k/天参考水位与 DO SQLite 占用">
+        <Card title="免费额度用量" subtitle="Workers 日请求量、DO SQLite 与活跃隧道">
           {!tel ? <p className="muted small">加载中…</p> : (
             <div className="stack-xs">
               <div>
@@ -259,8 +259,8 @@ export function Overview({ onNav }: { onNav: (tab: any) => void }) {
       </div>
 
       <div className="two-col">
-        <Card title="接入地址与三步实时诊断" subtitle="串行探测 HTTP 存活、移动端体检与浏览器到边缘节点的 WSS 握手（第 3 步仅测试 WSS 连通，不校验宿主注册密钥或激活码）"
-          action={<button className="btn-ghost btn-sm" onClick={runDiagnostics} disabled={probing}><Activity size={14} />{probing ? '探测中…' : '三步一键诊断'}</button>}>
+        <Card title="接入地址与连接诊断" subtitle="依次检查 HTTP 存活、移动端接口与浏览器到边缘的 WSS 握手；不校验激活码与注册密钥"
+          action={<button className="btn-ghost btn-sm" onClick={runDiagnostics} disabled={probing}><Activity size={14} />{probing ? '诊断中…' : '开始诊断'}</button>}>
           <div className="kv-list">
             {[
               ['手机 App 中转地址', origin],
@@ -286,7 +286,7 @@ export function Overview({ onNav }: { onNav: (tab: any) => void }) {
           )}
         </Card>
 
-        <Card title="近期操作审计" subtitle="管理员关键操作记录"
+        <Card title="近期操作审计" subtitle="管理员操作记录"
           action={<button className="btn-ghost btn-sm" onClick={() => onNav('audit')}>查看全部</button>}>
           {audit.length === 0 ? <EmptyState title="暂无审计记录" hint="切换模式、生成激活码或踢出隧道后会在此记录" /> : (
             <div className="feed">
@@ -302,7 +302,7 @@ export function Overview({ onNav }: { onNav: (tab: any) => void }) {
         </Card>
       </div>
 
-      <Modal open={wizardOpen} title="零门槛接入向导" onClose={() => setWizardOpen(false)} width={560}
+      <Modal open={wizardOpen} title="接入向导" onClose={() => setWizardOpen(false)} width={560}
         footer={<button className="btn-primary" onClick={() => setWizardOpen(false)}>关闭</button>}>
         <div className="form">
           <div className="banner">

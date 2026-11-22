@@ -57,7 +57,7 @@ export function Audit() {
   }
 
   return (
-    <Card title="操作审计日志" subtitle="保留最近 200 条管理动作、登录与准入变更记录"
+    <Card title="操作审计日志" subtitle="保留最近 200 条管理、登录与准入变更记录"
       action={
         <div className="btn-row">
           <button className="btn-ghost btn-sm" disabled={!filtered.length} onClick={() => exportFile('csv')}><Download size={14} />CSV</button>

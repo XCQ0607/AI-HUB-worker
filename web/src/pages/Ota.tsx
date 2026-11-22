@@ -76,10 +76,10 @@ export function Ota() {
 
   return (
     <div className="stack">
-      <Card title="插件紧急 OTA 分发" subtitle="托管 dsh-mobile-plugin 紧急完整包 (.tar.gz)，宿主通过 /api/desktop-plugins/ota/latest?platform=<平台>&channel=<渠道> 拉取并校验 SHA-256"
+      <Card title="插件 OTA" subtitle="托管插件完整包（.tar.gz）；宿主按平台与渠道拉取最新版本并校验 SHA-256"
         action={
           <div className="btn-row">
-            <Badge tone={enabled ? 'ok' : 'warn'}>{enabled ? 'R2 就绪' : '未绑定 R2'}</Badge>
+            <Badge tone={enabled ? 'ok' : 'warn'}>{enabled ? 'R2 已绑定' : '未绑定 R2'}</Badge>
             <button className="icon-btn" onClick={load} title="刷新" aria-label="刷新 OTA 列表"><RefreshCw size={14} /></button>
             <button className="btn-primary" disabled={!enabled} onClick={() => setOpen(true)}><Upload size={14} />发布包</button>
           </div>

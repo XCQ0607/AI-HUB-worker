@@ -22,6 +22,20 @@ interface Pend {
   tid: string; method: string; sse: boolean; device: string; created: number
   resolve: (r: Response) => void; ctrl?: ReadableStreamDefaultController<Uint8Array>
   headSent: boolean; paused: boolean; timer?: ReturnType<typeof setTimeout>; fallbackTimer?: ReturnType<typeof setTimeout>; sent: number
+  /** 镜像上下文：只有可缓存的列表读请求才有值，用于上游 5xx 时回退旧列表。 */
+  instance: string; mirror: { kind: 'sessions' | 'workspaces'; rev: string } | null; creds: string[]
+}
+
+/** 每条隧道最多一条在途分片上传；断线或空闲超时后丢弃。 */
+interface PendingUpload {
+  id: number; instance: string; scope: string; key: string; creds: string
+  total: number; nextOffset: number; idleAt: number
+  /** 已创建的 R2 multipart 会话；单条密文不超过一个 R2 分片时保持 null，最后直接 put。 */
+  upload: R2MultipartUpload | null
+  uploaded: R2UploadedPart[]
+  /** 尚未攒满 R2_PART_BYTES 的字节，最多一个分片的量。 */
+  pending: Uint8Array[]
+  pendingBytes: number
 }
 
 const NOT_FOUND = 'not found'
@@ -34,10 +48,29 @@ const MAX_WS_MSG = 8 * 1024 * 1024
 const MAX_SSE_CONNECTIONS = 64
 const MAX_SSE_PER_DEVICE = 3
 const HEADER_TIMEOUT = 60_000
-const MAX_BLOB = 5 * 1024 * 1024, MAX_BLOB_INSTANCE = 64 * 1024 * 1024, BLOB_TTL = 7 * 86400_000
+// 单条密文上限与上游 MAX_BLOB_BYTES 默认上限（64 MiB）一致；每实例总量 256 MiB，超限先淘汰该实例最旧条目。
+const MAX_BLOB = 64 * 1024 * 1024, MAX_BLOB_INSTANCE = 256 * 1024 * 1024, BLOB_TTL = 7 * 86400_000
+// 旧 id=0 整包路径的单条上限：base64 后约 6.7 MiB，留足 Workers WebSocket 单帧余量；
+// 更大的密文必须走分片（见 blobUpload 能力协商）。
+const MAX_BLOB_INLINE = 5 * 1024 * 1024
+/** 分片上传的协议片长（解码后字节），与上游 blobstore/upload.rs 的 MAX_CHUNK_BYTES 一致。 */
+const MAX_CHUNK_BYTES = 48 * 1024
+/** R2 multipart 的固定分片长度：除末片外必须等长且不小于 5 MiB，因此按此粒度攒块后上传。 */
+const R2_PART_BYTES = 5 * 1024 * 1024
+/** 分片上传在两片之间的空闲上限，超时丢弃未完成上传（量片间空闲，不是整份耗时）。 */
+const BLOB_UPLOAD_IDLE_MS = 90_000
 const NULL_BODY = new Set([101, 204, 205, 304])
+/** 镜像兜底响应的统一标记头：stale 表示这是旧列表，不是本次上游的真实结果。 */
+const STALE_HEADERS = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-dsh-relay-mirror': 'stale' } as const
 const enc = new TextEncoder()
 const notFound = () => new Response(NOT_FOUND, { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } })
+/** 按已知总长拼合若干字节块（上传攒块用）。 */
+function concatBytes(parts: Uint8Array[], total: number): Uint8Array {
+  const out = new Uint8Array(total)
+  let at = 0
+  for (const p of parts) { out.set(p, at); at += p.length }
+  return out
+}
 function closeReason(s: string): string {
   if (enc.encode(s).byteLength <= 123) return s
   let out = '', bytes = 0
@@ -62,6 +95,7 @@ export class Hub extends DurableObject<Env> {
   private seq = (crypto.getRandomValues(new Uint32Array(1))[0] >>> 1) || 1
   private unregTimeouts = 0
   private blobEvicted = 0
+  private blobUploads = new Map<string, PendingUpload>()
   private lastSlaveReport = 0
   private lastBlobSweep = 0
 
@@ -356,7 +390,7 @@ export class Hub extends DurableObject<Env> {
         this.admin.setMigration(att.instance, dest)
         return
       }
-      case T.blobPut: await this.blobPut(att, parseJson(f.payload)); return
+      case T.blobPut: await this.blobPut(ws, att, f.id, parseJson(f.payload)); return
       case T.blobDelete: await this.blobDelete(att, parseJson(f.payload)); return
       case T.revokeAll: return this.send(ws, jsonFrame(T.revokeAllAck, 0, { ok: true, revoked: 0 }))
       default: return
@@ -403,10 +437,14 @@ export class Hub extends DurableObject<Env> {
     }
     att.reg = true; att.instance = instance; att.version = version; att.license = license; att.saved = now
     ws.serializeAttachment(att)
-    this.send(ws, jsonFrame(T.registered, 0, { ok: true, mirror: this.admin.mirrorEnabled }))
+    // blobUpload 声明本连接的分片能力；宿主据此决定走分片还是旧整包。无 R2 时不下发，
+    // 宿主自动回退到 blobPut id=0 整包语义。
+    const registeredAck: Record<string, unknown> = { ok: true, mirror: this.admin.mirrorEnabled }
+    if (this.env.BLOB) registeredAck.blobUpload = { maxChunkBytes: MAX_CHUNK_BYTES, maxBlobBytes: MAX_BLOB }
+    this.send(ws, jsonFrame(T.registered, 0, registeredAck))
   }
 
-  private onHead(att: TAtt, f: Frame) {
+  private async onHead(att: TAtt, f: Frame) {
     const p = this.pending.get(f.id)
     if (!p || p.tid !== att.tid || p.headSent) return
     const h = parseJson(f.payload) ?? {}
@@ -417,6 +455,23 @@ export class Hub extends DurableObject<Env> {
       if (!forwardable(k) && k.toLowerCase() !== 'content-length') continue
       try { Array.isArray(v) ? v.forEach(x => headers.append(k, String(x))) : headers.set(k, String(v)) } catch { /* bad header */ }
     }
+
+    // 上游 5xx：可缓存的列表读请求优先回退到已过凭据校验的旧镜像，并如实标记 stale。
+    // 与弱网超时回退的区别是本路径没有等待——上游已经明确失败，不必再等。
+    if (status >= 500 && p.mirror) {
+      const hit = await this.mirror.lookup(p.instance, p.mirror.kind, p.mirror.rev, p.creds)
+      if (hit && !p.headSent) {
+        this.pending.delete(f.id)
+        clearTimeout(p.timer ?? null); clearTimeout(p.fallbackTimer ?? null)
+        p.headSent = true
+        const t = this.byTid(p.tid)
+        if (t) this.send(t.ws, encodeFrame(T.httpCancel, f.id))
+        this.admin.recordTraffic(p.instance, 0, 0, enc.encode(hit).byteLength, true)
+        p.resolve(new Response(hit, { status: 200, headers: { ...STALE_HEADERS } }))
+        return
+      }
+    }
+
     p.headSent = true; clearTimeout(p.timer ?? null); clearTimeout(p.fallbackTimer ?? null)
     if (NULL_BODY.has(status) || p.method === 'HEAD') {
       this.pending.delete(f.id)
@@ -453,6 +508,9 @@ export class Hub extends DurableObject<Env> {
   }
 
   private dropTunnel(tid: string) {
+    const pending = this.blobUploads.get(tid)
+    this.blobUploads.delete(tid)
+    if (pending?.upload) this.ctx.waitUntil(pending.upload.abort().catch(() => { /* 已过期 */ }))
     for (const [id, p] of [...this.pending]) if (p.tid === tid) this.finishError(id, p, 'upstream unavailable', 502)
     for (const ws of this.ctx.getWebSockets('phone')) {
       const a = ws.deserializeAttachment() as PAtt
@@ -561,6 +619,13 @@ export class Hub extends DurableObject<Env> {
       any = true; unreg ||= !att.reg
     }
 
+    // 回收片间空闲超时的未完成上传；旧完整 blob 不受影响，已创建的 R2 multipart 会话一并中止。
+    for (const [tid, up] of [...this.blobUploads]) {
+      if (now - up.idleAt <= BLOB_UPLOAD_IDLE_MS) continue
+      this.blobUploads.delete(tid)
+      if (up.upload) { try { await up.upload.abort() } catch { /* 已过期 */ } }
+    }
+
     const slaveInterval = Math.max(30, Number(this.env.PLATFORM_REPORT_INTERVAL_SECONDS) || 300) * 1000
     const isSlave = this.admin.isSlave && Boolean(this.env.PLATFORM_CLAIM_CODE?.trim())
     if (isSlave && now - this.lastSlaveReport >= slaveInterval) await this.reportToMaster(now)
@@ -602,10 +667,7 @@ export class Hub extends DurableObject<Env> {
         if (hit) {
           this.admin.recordTraffic(instance, 1, 0, enc.encode(hit).byteLength, true)
           this.admin.flushMetrics()
-          return new Response(hit, {
-            status: 200,
-            headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-dsh-relay-mirror': 'stale' },
-          })
+          return new Response(hit, { status: 200, headers: STALE_HEADERS })
         }
       }
       const rej = this.pluginRejected.get(instance)
@@ -669,7 +731,10 @@ export class Hub extends DurableObject<Env> {
     const fallbackMs = mirrorRead ? this.admin.mirrorFallbackMs : 0
 
     return new Promise<Response>(resolve => {
-      const p: Pend = { tid, method: req.method, sse: isSse, device, created: Date.now(), resolve, headSent: false, paused: false, sent: 0 }
+      const p: Pend = {
+        tid, method: req.method, sse: isSse, device, created: Date.now(), resolve, headSent: false, paused: false, sent: 0,
+        instance, mirror: mirrorRead, creds,
+      }
       p.timer = setTimeout(() => {
         this.cancel(id, 504, 'upstream header timeout')
       }, HEADER_TIMEOUT)
@@ -686,7 +751,7 @@ export class Hub extends DurableObject<Env> {
             this.admin.flushMetrics()
             resolve(new Response(hit, {
               status: 200,
-              headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', 'x-dsh-relay-mirror': 'stale' },
+              headers: STALE_HEADERS,
             }))
           }
         }, fallbackMs)
@@ -758,34 +823,167 @@ export class Hub extends DurableObject<Env> {
   // ---------- blobs (optional R2) ----------
   private blobKey(inst: string, scope: string, key: string) { return `${encodeURIComponent(inst)}/${scope}/${key}` }
 
-  private async blobPut(att: TAtt, r: any) {
+  /** 解析并校验宿主上报的设备凭据摘要；返回 JSON 文本，非法时返回 null。 */
+  private parseBlobCreds(raw: unknown): string | null {
+    if (!Array.isArray(raw)) return '[]'
+    if (raw.length > 200) return null
+    const out: { hash: string; expiresAt: number }[] = []
+    for (const c of raw) {
+      const rawHash = typeof c === 'string' ? c : c?.hash
+      const hash = typeof rawHash === 'string' ? rawHash.trim().toLowerCase() : ''
+      if (!/^[0-9a-f]{64}$/.test(hash)) continue
+      out.push({ hash, expiresAt: Math.max(0, Number(c?.expiresAt) || 0) })
+    }
+    return JSON.stringify(out)
+  }
+
+  /** 整包写入（旧 blobPut id=0 与分片收尾共用）。 */
+  private async blobWrite(att: TAtt, scope: string, key: string, creds: string, bytes: Uint8Array) {
+    const bucket = this.env.BLOB!, sql = this.ctx.storage.sql
+    await bucket.put(this.blobKey(att.instance, scope, key), bytes)
+    sql.exec(`INSERT INTO blobs(instance,scope,k,creds,size,updated) VALUES(?,?,?,?,?,?)
+      ON CONFLICT(instance,scope,k) DO UPDATE SET creds=excluded.creds,size=excluded.size,updated=excluded.updated`,
+      att.instance, scope, key, creds, bytes.length, Date.now())
+    await this.blobEvict(att.instance)
+  }
+
+  private async blobPut(ws: WebSocket, att: TAtt, id: number, r: any) {
     const bucket = this.env.BLOB, sql = this.ctx.storage.sql
     if (!bucket || !att.reg || !att.instance || !r) return
     const scope = r.scope, key = String(r.key ?? '').trim()
+
+    // id !== 0：分片上传。首片带 scope/key/creds，后续片只带 offset/total/final/cipher。
+    if (id !== 0) return this.blobPutChunk(ws, att, id, r)
+
+    // id === 0：旧整包语义，保持不变。
     if (!['messages', 'file'].includes(scope) || !key || key.length > 512) return
-    if (Array.isArray(r.creds) && r.creds.length > 200) return
-    const parsedCreds: { hash: string; expiresAt: number }[] = []
-    if (Array.isArray(r.creds)) {
-      for (const c of r.creds) {
-        const rawHash = typeof c === 'string' ? c : c?.hash
-        const hash = typeof rawHash === 'string' ? rawHash.trim().toLowerCase() : ''
-        if (!/^[0-9a-f]{64}$/.test(hash)) continue
-        parsedCreds.push({ hash, expiresAt: Math.max(0, Number(c?.expiresAt) || 0) })
-      }
-    }
-    const creds = JSON.stringify(parsedCreds)
-    const now = Date.now()
+    const creds = this.parseBlobCreds(r.creds)
+    if (creds === null) return
     if (typeof r.cipher === 'string' && r.cipher) {
       let bytes: Uint8Array
       try { bytes = b64uDecode(r.cipher) } catch { return }
-      if (bytes.length > MAX_BLOB) return
-      await bucket.put(this.blobKey(att.instance, scope, key), bytes)
-      sql.exec(`INSERT INTO blobs(instance,scope,k,creds,size,updated) VALUES(?,?,?,?,?,?)
-        ON CONFLICT(instance,scope,k) DO UPDATE SET creds=excluded.creds,size=excluded.size,updated=excluded.updated`, att.instance, scope, key, creds, bytes.length, now)
-      await this.blobEvict(att.instance)
-    } else if (r.cipher === '' && parsedCreds.length > 0) {
+      if (bytes.length > MAX_BLOB_INLINE) return
+      await this.blobWrite(att, scope, key, creds, bytes)
+    } else if (r.cipher === '' && creds !== '[]') {
       sql.exec('UPDATE blobs SET creds=? WHERE instance=? AND scope=? AND k=?', creds, att.instance, scope, key)
     }
+  }
+
+  /**
+   * 分片上传：宿主一次只发一片、收到 ack 才发下一片。
+   * 校验规则与上游 PROTOCOL.md 一致：offset 必须等于已确认的 nextOffset，
+   * 非尾片 offset+片长 < total 且 final:false，尾片 offset+片长 === total 且 final:true。
+   */
+  private async blobPutChunk(ws: WebSocket, att: TAtt, id: number, r: any) {
+    const now = Date.now()
+    // 失败 ack 会丢弃本次临时上传，旧的完整 blob 保持可读；宿主保留 dirty 由下一轮以新 id 从零重推。
+    const fail = async (error: string) => {
+      const up = this.blobUploads.get(att.tid)
+      this.blobUploads.delete(att.tid)
+      // 已经创建过 multipart 会话的要中止，避免 R2 侧残留。
+      if (up?.upload) { try { await up.upload.abort() } catch { /* 已 abort 或过期 */ } }
+      this.send(ws, encodeFrame(T.blobPut, id, JSON.stringify({ ok: false, nextOffset: 0, done: false, error })))
+    }
+
+    // 宿主失败后会用新 id 从零重推（见 PROTOCOL.md），此时丢弃旧临时上传、接受新 id；
+    // 迟到的旧 id ack 不会再被应答。
+    let up = this.blobUploads.get(att.tid)
+    // 新 id 到达：静默丢弃旧上传（旧 id 的迟到 ack 不再应答），让新上传从头开始。
+    if (up && up.id !== id) {
+      this.blobUploads.delete(att.tid)
+      if (up.upload) { try { await up.upload.abort() } catch { /* 已过期 */ } }
+      up = undefined
+    }
+    if (!up || now - up.idleAt > BLOB_UPLOAD_IDLE_MS) {
+      if (up) { this.blobUploads.delete(att.tid); if (up.upload) { try { await up.upload.abort() } catch { /* */ } } }
+      const scope = r.scope, key = String(r.key ?? '').trim()
+      if (!['messages', 'file'].includes(scope)) return fail('invalid scope')
+      if (!key || key.length > 512) return fail('invalid key')
+      const creds = this.parseBlobCreds(r.creds)
+      if (creds === null) return fail('invalid creds')
+      const total = Number(r.total)
+      if (!Number.isSafeInteger(total) || total <= 0 || total > MAX_BLOB) return fail('invalid total')
+      // 首片必须从 offset 0 开始。
+      if (Number(r.offset) !== 0) return fail('first chunk must start at offset 0')
+      up = {
+        id, instance: att.instance, scope, key, creds, total, nextOffset: 0, idleAt: now,
+        upload: null, uploaded: [], pending: [], pendingBytes: 0,
+      }
+      this.blobUploads.set(att.tid, up)
+    }
+    up.idleAt = now
+
+    const offset = Number(r.offset)
+    if (!Number.isSafeInteger(offset) || offset !== up.nextOffset) return fail('offset mismatch')
+    const total = Number(r.total)
+    if (Number.isSafeInteger(total) && total !== up.total) return fail('total mismatch')
+    const final = r.final === true
+
+    let chunk: Uint8Array
+    try { chunk = b64uDecode(String(r.cipher ?? '')) } catch { return fail('invalid cipher') }
+    if (!chunk.length) return fail('empty chunk')
+    if (chunk.length > MAX_CHUNK_BYTES) return fail('chunk too large')
+    const end = offset + chunk.length
+    if (final ? end !== up.total : end >= up.total) return fail('invalid chunk boundary')
+
+    up.nextOffset = end
+    up.pending.push(chunk)
+    up.pendingBytes += chunk.length
+
+    // 攒满一个 R2 分片就上传；单条密文放得下一个分片时不建 multipart，最后直接 put。
+    try {
+      // 严格大于才切：正好 R2_PART_BYTES 的密文留在缓冲里，最后走单次 put，省一次 multipart 会话。
+      while (up.pendingBytes > R2_PART_BYTES) await this.flushBlobPart(up)
+      if (!final) {
+        this.send(ws, encodeFrame(T.blobPut, id, JSON.stringify({ ok: true, nextOffset: up.nextOffset, done: false })))
+        return
+      }
+      await this.finishBlobUpload(att, up)
+    } catch (e: any) {
+      return fail(e?.message ? String(e.message).slice(0, 200) : 'r2 upload failed')
+    }
+    this.blobUploads.delete(att.tid)
+    this.send(ws, encodeFrame(T.blobPut, id, JSON.stringify({ ok: true, nextOffset: up.total, done: true })))
+  }
+
+  /**
+   * 从攒块缓冲里切出恰好 R2_PART_BYTES 上传为一个分片。
+   * R2 要求除末片外所有分片等长，所以这里必须精确切片，不能按「攒够就整块发」。
+   */
+  private async flushBlobPart(up: PendingUpload) {
+    const bucket = this.env.BLOB!
+    const all = concatBytes(up.pending, up.pendingBytes)
+    const body = all.subarray(0, R2_PART_BYTES)
+    const rest = all.subarray(R2_PART_BYTES)
+    up.pending = rest.length ? [rest.slice()] : []
+    up.pendingBytes = rest.length
+    if (!up.upload) up.upload = await bucket.createMultipartUpload(this.blobKey(up.instance, up.scope, up.key))
+    up.uploaded.push(await up.upload.uploadPart(up.uploaded.length + 1, body))
+  }
+
+  /** 尾片后收尾：小对象直接 put，大对象补齐末片并 complete。 */
+  private async finishBlobUpload(att: TAtt, up: PendingUpload) {
+    const bucket = this.env.BLOB!, sql = this.ctx.storage.sql
+    const path = this.blobKey(att.instance, up.scope, up.key)
+    let size = 0
+    if (!up.upload) {
+      const body = concatBytes(up.pending, up.pendingBytes)
+      up.pending = []; up.pendingBytes = 0
+      size = body.length
+      await bucket.put(path, body)
+    } else {
+      if (up.pendingBytes > 0) {
+        const body = concatBytes(up.pending, up.pendingBytes)
+        up.pending = []; up.pendingBytes = 0
+        up.uploaded.push(await up.upload.uploadPart(up.uploaded.length + 1, body))
+      }
+      await up.upload.complete(up.uploaded)
+      size = up.total
+    }
+    sql.exec(`INSERT INTO blobs(instance,scope,k,creds,size,updated) VALUES(?,?,?,?,?,?)
+      ON CONFLICT(instance,scope,k) DO UPDATE SET creds=excluded.creds,size=excluded.size,updated=excluded.updated`,
+      att.instance, up.scope, up.key, up.creds, size, Date.now())
+    await this.blobEvict(att.instance)
   }
 
   private async blobDelete(att: TAtt, r: any) {

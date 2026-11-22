@@ -129,7 +129,7 @@ export function Storage() {
             <EmptyState icon={<HardDrive size={22} />} title="加载离线镜像失败" hint={errs.mirror} action={<button className="btn-ghost btn-sm" onClick={load}>重试</button>} />
           </Card>
         ) : (
-        <Card title="离线镜像兜底 (0x17 sync)" subtitle="宿主断线时向已配对手机返回带 stale 标记的最近一次会话/工作区清单；关闭正文缓存后仍保留已配对手机的凭据摘要以校验 /push-token 和 /blob/*"
+        <Card title="离线镜像兜底 (0x17 sync)" subtitle="宿主断线时，向已配对手机返回带 stale 标记的会话/工作区清单"
           action={
             <div className="btn-row">
               <button className="btn-ghost" onClick={toggleMirror}>{mirror.enabled ? '停用正文缓存' : '启用离线镜像'}</button>
@@ -221,7 +221,7 @@ export function Storage() {
             <EmptyState icon={<Bell size={22} />} title="加载 APNs 令牌失败" hint={errs.push} action={<button className="btn-ghost btn-sm" onClick={load}>重试</button>} />
           </Card>
         ) : (
-        <Card title="iOS APNs 离线推送" subtitle="使用 WebCrypto ES256 JWT 直连 Apple APNs，锁屏状态下接收会话完成/审批通知"
+        <Card title="iOS APNs 离线推送" subtitle="手机锁屏时接收会话完成与审批提醒"
           action={<Badge tone={push.enabled ? 'ok' : 'warn'}>{push.enabled ? 'APNs 密钥已配置' : '未配置 APNS_* 密钥'}</Badge>}>
           {push.items.length === 0 ? <EmptyState icon={<Bell size={22} />} title="暂无设备推送令牌" hint="手机 App 配对并授权通知权限后会自动上报令牌" /> : (() => {
             const list = push.items.filter((p: any) => !q.trim() || `${p.instance} ${p.deviceId}`.toLowerCase().includes(q.trim().toLowerCase()))

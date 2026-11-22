@@ -58,7 +58,7 @@ export function Nodes() {
 
   if (ov.role === 'slave') {
     return (
-      <Card title="本节点运行于被控模式 (Slave)" subtitle="定期向主控端汇报本机摘要与在线状态，并接收远程准入指令">
+      <Card title="本节点运行于被控模式 (Slave)" subtitle="按周期向主控端上报本机摘要，并接收准入模式指令">
         <div className="kv-list">
           <div className="kv-row"><span className="muted">主控端地址</span><code>{ov.masterUrl}</code></div>
           <div className="kv-row"><span className="muted">上报周期</span><span>每 {Math.round((ov.reportIntervalSeconds || 300) / 60)} 分钟</span></div>
@@ -72,7 +72,7 @@ export function Nodes() {
 
   return (
     <div className="stack">
-      <Card title="被控端节点联邦 (Master)" subtitle="生成认领码配置到其它中转的 PLATFORM_MASTER_URL + PLATFORM_CLAIM_CODE，即可在此集中监控并远程统管准入模式"
+      <Card title="节点联邦" subtitle="用认领码把其它中转挂到这里，集中查看状态、统一下发准入模式"
         action={
           <div className="btn-row">
             <button className="icon-btn" onClick={load} title="刷新" aria-label="刷新节点列表"><RefreshCw size={14} /></button>

@@ -139,7 +139,7 @@ export function Licenses() {
 
   return (
     <div className="stack">
-      <Card title="准入模式" subtitle="控制哪些宿主电脑可以向本中转建立 /tunnel 隧道"
+      <Card title="准入模式" subtitle="谁可以向本中转建立 /tunnel 隧道"
         action={
           <div className="seg">
             {(['open', 'restricted'] as const).map(m => (
@@ -151,12 +151,12 @@ export function Licenses() {
         }>
         <div className="banner">
           {mode === 'restricted'
-            ? <><ShieldAlert size={16} className="warn" /><span>当前为 <b>限制模式</b>：宿主插件连接 <code>/tunnel</code> 时必须携带有效且未过期的激活码（在桌面插件面板「中转设置」中填入，或通过握手请求头 <code>x-dsh-license</code> 传递）。</span></>
+            ? <><ShieldAlert size={16} className="warn" /><span>当前为 <b>限制模式</b>：插件连接 <code>/tunnel</code> 时须携带有效且未过期的激活码（在插件面板「中转设置」填入，或通过请求头 <code>x-dsh-license</code> 传递）。</span></>
             : <span>当前为 <b>开放模式</b>：任何知道本中转地址的宿主都可直接建隧道（仍受 <code>TUNNEL_REGISTER_SECRET</code> 约束）。</span>}
         </div>
       </Card>
 
-      <Card title="激活码台账" subtitle="支持有效期控制、多机配额、批量操作与 CSV/TXT 导出"
+      <Card title="激活码" subtitle="按有效期、设备数、状态管理"
         action={
           <div className="btn-row">
             <button type="button" className="btn-ghost btn-sm" onClick={() => exportLicenses('csv')}><Download size={13} />CSV</button>

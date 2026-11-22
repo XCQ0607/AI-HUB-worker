@@ -135,7 +135,7 @@ export function WebhooksPanel() {
 
   return (
     <div className="stack">
-      <Card title="运维告警策略" subtitle="触发后将按渠道订阅自动推送；同一实例/IP 在冷却时间内不会重复刷屏">
+      <Card title="告警规则" subtitle="同一实例或 IP 在冷却期内不重复推送">
         <div className="chk-grid">
           <label className="chk-row"><input type="checkbox" checked={alerts.disconnect} onChange={e => saveAlerts({ ...alerts, disconnect: e.target.checked })} />宿主意外断线 / 心跳超时</label>
           <label className="chk-row"><input type="checkbox" checked={alerts.outdated} onChange={e => saveAlerts({ ...alerts, outdated: e.target.checked })} />旧版插件拦截告警</label>
@@ -148,7 +148,7 @@ export function WebhooksPanel() {
         </div>
       </Card>
 
-      <Card title="Webhook 推送渠道 (7 平台适配)" subtitle="收到宿主 0x1B pushSend 或运维告警时同步转发（支持 Bark / Telegram / 飞书 / 钉钉 / 企微 / Discord / 自定义）"
+      <Card title="推送渠道" subtitle="宿主 0x1B 会话通知与运维告警按渠道订阅转发"
         action={
           <div className="btn-row">
             <button className="btn-ghost" onClick={loadLogs}><History size={14} />投递日志</button>
@@ -177,7 +177,7 @@ export function WebhooksPanel() {
         ) : paged.length === 0 ? (
           <EmptyState icon={<Webhook size={24} />}
             title={items.length === 0 ? '尚未配置 Webhook 推送渠道' : '没有匹配的 Webhook 渠道'}
-            hint={items.length === 0 ? '自建用户无需官方 iOS .p8 密钥，配好 Bark 或 Telegram 即可实现锁屏任务提醒' : '请调整筛选条件'} />
+            hint={items.length === 0 ? '没有 Apple 开发者账号也能收锁屏提醒：配个 Bark 或 Telegram 即可' : '请调整筛选条件'} />
         ) : (
           <div className="table">
             <div className="tr t-wh th">

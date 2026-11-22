@@ -117,7 +117,7 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
   return (
     <div className="stack">
       <div className="two-col">
-        <Card title="准入与版本策略" subtitle="控制宿主隧道接入要求">
+        <Card title="准入与版本策略" subtitle="宿主接入要求">
           <div className="form">
             <label>准入模式 {data.modeControlled && <Badge tone="warn">主控端接管中</Badge>}
               <div className="seg">
@@ -143,14 +143,14 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
           </div>
         </Card>
 
-        <Card title="环境与绑定状态" subtitle="Secret 与绑定项由 env.json / wrangler secret 管理">
+        <Card title="绑定状态" subtitle="只读；改配置需编辑 env.json 或 wrangler secret">
           <div className="kv-list">
             <div className="kv-row"><span className="muted">隧道注册密钥 (TUNNEL_REGISTER_SECRET)</span>
               <Badge tone={data.registerSecretSet ? 'ok' : 'neutral'}>{data.registerSecretSet ? '已启用校验' : '未设置'}</Badge></div>
             <div className="kv-row"><span className="muted">Cloudflare R2 (BLOB / OTA)</span>
               <Badge tone={data.r2Enabled ? 'ok' : 'warn'}>{data.r2Enabled ? '已绑定' : '未绑定'}</Badge></div>
             <div className="kv-row"><span className="muted">iOS APNs 密钥 (APNS_*)</span>
-              <Badge tone={data.apnsEnabled ? 'ok' : 'neutral'}>{data.apnsEnabled ? '已就绪' : '未配置'}</Badge></div>
+              <Badge tone={data.apnsEnabled ? 'ok' : 'neutral'}>{data.apnsEnabled ? '已配置' : '未配置'}</Badge></div>
             <div className="kv-row"><span className="muted">OTA 发布令牌 (PLATFORM_OTA_CONTROL_TOKEN)</span>
               <Badge tone={data.otaTokenSet ? 'ok' : 'neutral'}>{data.otaTokenSet ? '已配置' : '仅管理员面板可用'}</Badge></div>
             <div className="kv-row"><span className="muted">联邦角色</span>
@@ -160,7 +160,7 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
       </div>
 
       <div className="two-col">
-        <Card title="离线镜像兜底策略" subtitle="允许宿主通过 0x17 帧同步会话与工作区快照">
+        <Card title="离线镜像策略" subtitle="宿主通过 0x17 帧同步会话与工作区快照">
           <div className="form">
             <label>正文缓存开关
               <div className="seg">
