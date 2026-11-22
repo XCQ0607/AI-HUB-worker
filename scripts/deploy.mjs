@@ -98,6 +98,7 @@ export async function main() {
   function run(cmd, args, { cwd = worker, input, allowFail, retries = 1 } = {}) {
     let r
     for (let i = 0; i < retries; i++) {
+      if (i > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, i * 4000)
       r = process.platform === 'win32'
         ? spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/c', cmd, ...args], { cwd, env, encoding: 'utf8', input })
         : spawnSync(cmd, args, { cwd, env, encoding: 'utf8', input })
