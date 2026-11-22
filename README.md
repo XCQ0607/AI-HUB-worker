@@ -116,7 +116,11 @@ node scripts/deploy-cluster.mjs slave        # 仅部署指定节点
 
 仓库内置了 [.github/workflows/deploy.yml](.github/workflows/deploy.yml)（**Deploy Cluster**），构建一次前端后通过 `strategy.matrix` 并行部署所有节点：
 
-1. 在 GitHub 仓库 **Settings → Secrets and variables → Actions → Secrets** 新增 **`CLUSTER_NODES_JSON`**，值为一个 JSON 数组，每个元素对应一个节点的 `env.json` 配置（需填写 `CLOUDFLARE_API_TOKEN` 与固定 `ADMIN_TOKEN`），模板如下：
+1. 在 GitHub 仓库 **Settings → Secrets and variables → Actions → Secrets** 新增 **`CLUSTER_NODES_JSON`**，值为一个 JSON 数组，每个元素对应一个节点的 `env.json` 配置（需填写固定 `ADMIN_TOKEN`）：
+   - **使用 API Token**（推荐）：填写 `CLOUDFLARE_API_TOKEN`。
+   - **使用 Global API Key**：留空或省略 `CLOUDFLARE_API_TOKEN`，改为填写 `CLOUDFLARE_EMAIL` + `CLOUDFLARE_API_KEY`（两者不可混填）。
+
+   模板如下（以 API Token 为例；若用 Global API Key，将 `CLOUDFLARE_API_TOKEN` 替换为 `CLOUDFLARE_EMAIL` + `CLOUDFLARE_API_KEY`）：
 
    ```json
    [
