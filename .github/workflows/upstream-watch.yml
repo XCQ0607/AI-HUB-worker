@@ -10,101 +10,198 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
   issues: write
 
 jobs:
   watch:
-    name: Check WNLUO/dsh-mobile-server
+    name: 检查上游协议 (WNLUO/dsh-mobile-server)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: 检出仓库
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: 配置 Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
 
-      - name: Shallow-clone upstream reference
-        run: |
-          rm -rf _upstream_ref
-          git clone --depth=1 https://github.com/WNLUO/dsh-mobile-server.git _upstream_ref
-
-      - name: Compare upstream protocol & baseline
-        id: check
+      - name: 拉取上游协议并比对锁文件
+        id: sync
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set +e
-          node scripts/sync-reference.mjs --check --ci --ref-dir _upstream_ref --json > sync_result.json
+          node scripts/sync-protocol.mjs sync --json > sync_result.json
           STATUS=$?
           set -e
-          rm -rf _upstream_ref
           cat sync_result.json
           node -e '
             const fs = require("fs");
             const r = JSON.parse(fs.readFileSync("sync_result.json", "utf8"));
             const out = process.env.GITHUB_OUTPUT;
             const changed = r.upstreamUpdated ? "true" : "false";
-            const drift = (r.problems && r.problems.length > 0) ? "true" : "false";
+            const protoChanged = r.protocolChanged ? "true" : "false";
+            const hasProblems = (r.problems && r.problems.length > 0) ? "true" : "false";
             fs.appendFileSync(out, `commit=${r.commit || ""}\n`);
+            fs.appendFileSync(out, `short=${(r.commit || "").slice(0, 8)}\n`);
             fs.appendFileSync(out, `version=${r.relayVersion || ""}\n`);
             fs.appendFileSync(out, `baseline_commit=${r.baselineCommit || ""}\n`);
             fs.appendFileSync(out, `baseline_version=${r.baselineVersion || ""}\n`);
             fs.appendFileSync(out, `changed=${changed}\n`);
-            fs.appendFileSync(out, `drift=${drift}\n`);
+            fs.appendFileSync(out, `proto_changed=${protoChanged}\n`);
+            fs.appendFileSync(out, `has_problems=${hasProblems}\n`);
           '
           echo "sync exit status: $STATUS"
 
-      - name: Write job summary
+      - name: 生成中文执行摘要
         run: |
-          {
-            echo "### Upstream Watch: \`WNLUO/dsh-mobile-server\`"
-            echo ""
-            echo "| Field | Value |"
-            echo "| --- | --- |"
-            echo "| Upstream Commit | \`${{ steps.check.outputs.commit }}\` |"
-            echo "| Upstream Relay Version | \`${{ steps.check.outputs.version }}\` |"
-            echo "| Baseline Commit | \`${{ steps.check.outputs.baseline_commit }}\` |"
-            echo "| Baseline Relay Version | \`${{ steps.check.outputs.baseline_version }}\` |"
-            echo "| Upstream Updated | \`${{ steps.check.outputs.changed }}\` |"
-            echo "| Protocol Drift Detected | \`${{ steps.check.outputs.drift }}\` |"
-          } >> "$GITHUB_STEP_SUMMARY"
+          node -e '
+            const fs = require("fs");
+            const r = JSON.parse(fs.readFileSync("sync_result.json", "utf8"));
+            const lines = [
+              "### 上游协议巡检：`WNLUO/dsh-mobile-server`",
+              "",
+              "| 项目 | 值 |",
+              "| --- | --- |",
+              `| 上游最新提交 | \`${r.commit || "-"}\` |`,
+              `| 上游 Relay 版本 | \`${r.relayVersion || "-"}\` |`,
+              `| 当前锁文件提交 | \`${r.baselineCommit || "-"}\` |`,
+              `| 当前锁文件版本 | \`${r.baselineVersion || "-"}\` |`,
+              `| 上游是否有更新 | \`${r.upstreamUpdated ? "是" : "否"}\` |`,
+              `| 协议定义是否变化 | \`${r.protocolChanged ? "是" : "否"}\` |`,
+              `| 校验异常数量 | \`${(r.problems || []).length}\` |`,
+            ];
+            if (r.baselineCommit && r.commit && r.baselineCommit !== r.commit) {
+              const cmpUrl = `https://github.com/${r.upstream}/compare/${r.baselineCommit}...${r.commit}`;
+              lines.push("", `🔍 **上游源码对比**: [查看 Diff (${r.baselineCommit.slice(0, 8)}...${r.commit.slice(0, 8)})](${cmpUrl})`);
+            }
+            if (r.changes && r.changes.length) {
+              lines.push("", "#### 协议变更明细", ...r.changes.map(c => `- ${c}`));
+            }
+            if (r.problems && r.problems.length) {
+              lines.push("", "#### 校验异常", ...r.problems.map(p => `- ❌ ${p}`));
+            }
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n");
+          '
 
-      - name: Open or update tracking issue on upstream update / drift
-        if: steps.check.outputs.changed == 'true' || steps.check.outputs.drift == 'true'
+      - name: 协议校验异常时创建或更新中文 Issue
+        if: steps.sync.outputs.has_problems == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          COMMIT="${{ steps.check.outputs.commit }}"
-          SHORT="${COMMIT:0:8}"
-          VER="${{ steps.check.outputs.version }}"
-          TITLE="[Upstream Watch] dsh-mobile-server updated to ${SHORT} (v${VER})"
+          SHORT="${{ steps.sync.outputs.short }}"
+          VER="${{ steps.sync.outputs.version }}"
+          TITLE="[上游监控] dsh-mobile-server 协议校验异常 (${SHORT})"
           BODY="$(node -e '
             const fs = require("fs");
             const r = JSON.parse(fs.readFileSync("sync_result.json", "utf8"));
             const lines = [
-              "@XCQ0607 Upstream changes or protocol drift detected in `WNLUO/dsh-mobile-server`.",
+              "@XCQ0607 检测到上游 `WNLUO/dsh-mobile-server` 存在不兼容或超出约束范围的协议变更，已阻止自动生成 PR。",
               "",
-              `- **Upstream Commit**: \`${r.commit}\``,
-              `- **Upstream Relay Version**: \`${r.relayVersion}\``,
-              `- **Baseline Commit**: \`${r.baselineCommit}\``,
-              `- **Baseline Relay Version**: \`${r.baselineVersion}\``,
-              `- **Upstream Updated**: ${r.upstreamUpdated}`,
+              `- **上游提交**: \`${r.commit}\``,
+              `- **上游 Relay 版本**: \`${r.relayVersion}\``,
+              `- **当前锁文件提交**: \`${r.baselineCommit}\``,
+              `- **当前锁文件版本**: \`${r.baselineVersion}\``,
+              ...(r.baselineCommit && r.commit && r.baselineCommit !== r.commit
+                ? [`- **上游源码对比**: [查看 Diff (${r.baselineCommit.slice(0, 8)}...${r.commit.slice(0, 8)})](https://github.com/${r.upstream}/compare/${r.baselineCommit}...${r.commit})`]
+                : []),
               "",
-              "### Protocol Check",
-              ...(r.problems && r.problems.length
-                ? r.problems.map(p => `- ❌ ${p}`)
-                : ["- ✅ Protocol table (`0x01`–`0x1E`) remains compatible with `worker/src/protocol.ts`."]),
+              "### 校验异常明细",
+              ...(r.problems || []).map(p => `- ❌ ${p}`),
               "",
-              "To refresh locally: `node scripts/sync-reference.mjs --update-baseline`",
+              "### 建议处理方式",
+              "1. 检查上游 `server/relay-core/protocol-types.js` 的最新变更。",
+              "2. 确认无误后在本地调整 `scripts/sync-protocol.mjs` 或 Worker 业务逻辑，运行 `npm run protocol:sync` 更新锁文件与生成代码。",
             ];
             process.stdout.write(lines.join("\n"));
           ')"
-          EXISTING="$(gh issue list --repo "${{ github.repository }}" --state open --search "[Upstream Watch] in:title" --json number,title --jq '.[0].number // empty')"
+          EXISTING="$(gh issue list --repo "${{ github.repository }}" --state open --search "[上游监控] in:title" --json number,title --jq '.[0].number // empty')"
           if [ -n "$EXISTING" ]; then
             gh issue edit "$EXISTING" --repo "${{ github.repository }}" --title "$TITLE" --body "$BODY"
-            echo "Updated existing issue #$EXISTING"
+            echo "已更新中文 Issue #$EXISTING"
           else
             gh issue create --repo "${{ github.repository }}" --title "$TITLE" --body "$BODY"
+          fi
+
+      - name: 安装依赖并验证生成代码与类型检查
+        if: steps.sync.outputs.has_problems != 'true' && (steps.sync.outputs.changed == 'true' || steps.sync.outputs.proto_changed == 'true')
+        id: verify
+        run: |
+          npm --prefix worker ci --no-audit --no-fund
+          npm --prefix web ci --no-audit --no-fund
+          npm run protocol:check
+          set +e
+          npm run typecheck
+          TC_STATUS=$?
+          set -e
+          if [ "$TC_STATUS" -eq 0 ]; then
+            echo "typecheck_ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "typecheck_ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 提交变更并创建或更新中文 PR
+        if: steps.sync.outputs.has_problems != 'true' && (steps.sync.outputs.changed == 'true' || steps.sync.outputs.proto_changed == 'true')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          SHORT="${{ steps.sync.outputs.short }}"
+          VER="${{ steps.sync.outputs.version }}"
+          BRANCH="chore/protocol-sync"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet -- protocol/upstream.lock.json worker/src/protocol.generated.ts; then
+            echo "锁文件与生成代码无变化，跳过 PR"
+            exit 0
+          fi
+
+          git checkout -B "$BRANCH"
+          git add protocol/upstream.lock.json worker/src/protocol.generated.ts
+          git commit -m "chore(protocol): 同步上游协议至 ${SHORT} (v${VER})"
+          git push --force origin "$BRANCH"
+
+          TITLE="[协议同步] 上游 dsh-mobile-server 更新至 ${SHORT} (v${VER})"
+          TYPECHECK_OK="${{ steps.verify.outputs.typecheck_ok }}"
+          BODY="$(TYPECHECK_OK="$TYPECHECK_OK" node -e '
+            const fs = require("fs");
+            const r = JSON.parse(fs.readFileSync("sync_result.json", "utf8"));
+            const tcOk = process.env.TYPECHECK_OK === "true";
+            const lines = [
+              "@XCQ0607 检测到上游 `WNLUO/dsh-mobile-server` 有新提交，已自动更新协议锁文件与生成代码。",
+              "",
+              "### 版本对比",
+              `- **上游提交**: \`${r.baselineCommit.slice(0, 8)}\` → \`${r.commit.slice(0, 8)}\`（完整：\`${r.commit}\`）`,
+              `- **Relay 版本**: \`v${r.baselineVersion}\` → \`v${r.relayVersion}\``,
+              `- **协议定义是否变化**: ${r.protocolChanged ? "是（请重点关注下方变更）" : "否（仅上游提交或非协议代码更新）"}`,
+              ...(r.baselineCommit && r.commit && r.baselineCommit !== r.commit
+                ? [`- **上游源码对比**: [查看 Diff (${r.baselineCommit.slice(0, 8)}...${r.commit.slice(0, 8)})](https://github.com/${r.upstream}/compare/${r.baselineCommit}...${r.commit})`]
+                : []),
+              "",
+              "### 协议变更明细",
+              ...(r.changes && r.changes.length
+                ? r.changes.map(c => `- ${c}`)
+                : ["- ✅ 帧类型（`0x01`–`0x1E`）、`HEADER_LEN`、`OWNED_PATHS` 等协议常量无变化。"]),
+              "",
+              "### 自动检查状态",
+              "- `npm run protocol:check`: ✅ 通过",
+              `- \`npm run typecheck\`: ${tcOk ? "✅ 通过" : "❌ 未通过（请根据 TS 类型错误补充业务适配代码后合并）"}`,
+              "",
+              "> 本 PR 由 `.github/workflows/upstream-watch.yml` 自动创建。",
+            ];
+            process.stdout.write(lines.join("\n"));
+          ')"
+
+          EXISTING_PR="$(gh pr list --repo "${{ github.repository }}" --state open --head "$BRANCH" --base main --json number --jq '.[0].number // empty')"
+          if [ -n "$EXISTING_PR" ]; then
+            gh pr edit "$EXISTING_PR" --repo "${{ github.repository }}" --title "$TITLE" --body "$BODY"
+            echo "已更新中文 PR #$EXISTING_PR"
+          else
+            gh pr create --repo "${{ github.repository }}" --base main --head "$BRANCH" --title "$TITLE" --body "$BODY"
           fi

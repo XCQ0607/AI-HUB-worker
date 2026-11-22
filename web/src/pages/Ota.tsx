@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Package, RefreshCw, Search, Trash2, Upload } from 'lucide-react'
 import { api, ago, bytes, shortId, uploadBinary } from '../api'
-import { Badge, Card, ConfirmDialog, CopyBtn, EmptyState, Modal, Pagination, platformTone, SortState, SortTh, useToast } from '../components/ui'
+import { Badge, Card, ConfirmDialog, CopyBtn, EmptyState, Modal, Pagination, platformTone, Select, SortState, SortTh, useToast } from '../components/ui'
 
 const MAX_OTA_BYTES = 32 * 1024 * 1024
 const SAFE_SEG = /^[a-zA-Z0-9_-]{1,32}$/
@@ -107,10 +107,12 @@ export function Ota() {
                   <Search size={14} className="muted" />
                   <input placeholder="搜索版本号 / 渠道 / SHA-256…" value={q} onChange={e => { setQ(e.target.value); setPage(1) }} />
                 </div>
-                <select value={platFilter} onChange={e => { setPlatFilter(e.target.value); setPage(1) }} style={{ width: 130 }}>
-                  <option value="all">全部平台</option>
-                  {platforms.map(p => <option key={p} value={p}>{p}</option>)}
-                </select>
+                <Select
+                  value={platFilter}
+                  onChange={v => { setPlatFilter(v); setPage(1) }}
+                  style={{ width: 130 }}
+                  options={[{ value: 'all', label: '全部平台' }, ...platforms.map(p => ({ value: p, label: p }))]}
+                />
               </div>
               {paged.length === 0 ? <EmptyState icon={<Package size={22} />} title="无匹配 OTA 包" /> : (
                 <div className="table">

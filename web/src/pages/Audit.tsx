@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Download, RefreshCw, ScrollText, Search } from 'lucide-react'
 import { api, fmtTime } from '../api'
-import { actionTone, Badge, Card, EmptyState, Pagination, SortState, SortTh, useToast } from '../components/ui'
+import { actionTone, Badge, Card, EmptyState, Pagination, Select, SortState, SortTh, useToast } from '../components/ui'
 
 export function Audit() {
   const toast = useToast()
@@ -70,24 +70,29 @@ export function Audit() {
           <Search size={14} className="muted" />
           <input placeholder="按动作 / 操作人 / 目标过滤…" value={q} onChange={e => { setQ(e.target.value); setPage(1) }} />
         </div>
-        <select value={cat} onChange={e => { setCat(e.target.value); setPage(1) }} style={{ width: 150 }}>
-          <option value="all">全部类别</option>
-          <option value="auth.">登录与 2FA</option>
-          <option value="admin.">管理员账号</option>
-          <option value="license.">激活码</option>
-          <option value="device.">设备绑定</option>
-          <option value="tunnel.">隧道连接</option>
-          <option value="instance.">宿主实例</option>
-          <option value="migration.">迁移台账</option>
-          <option value="mirror.">离线镜像</option>
-          <option value="blob.">R2 密文</option>
-          <option value="push.">APNs 推送</option>
-          <option value="webhook.">Webhook</option>
-          <option value="ota.">OTA 分发</option>
-          <option value="node.">节点联邦</option>
-          <option value="monitor.">监控令牌</option>
-          <option value="settings.">系统设置</option>
-        </select>
+        <Select
+          value={cat}
+          onChange={v => { setCat(v); setPage(1) }}
+          style={{ width: 150 }}
+          options={[
+            { value: 'all', label: '全部类别' },
+            { value: 'auth.', label: '登录与 2FA' },
+            { value: 'admin.', label: '管理员账号' },
+            { value: 'license.', label: '激活码' },
+            { value: 'device.', label: '设备绑定' },
+            { value: 'tunnel.', label: '隧道连接' },
+            { value: 'instance.', label: '宿主实例' },
+            { value: 'migration.', label: '迁移台账' },
+            { value: 'mirror.', label: '离线镜像' },
+            { value: 'blob.', label: 'R2 密文' },
+            { value: 'push.', label: 'APNs 推送' },
+            { value: 'webhook.', label: 'Webhook' },
+            { value: 'ota.', label: 'OTA 分发' },
+            { value: 'node.', label: '节点联邦' },
+            { value: 'monitor.', label: '监控令牌' },
+            { value: 'settings.', label: '系统设置' },
+          ]}
+        />
       </div>
       {loading ? <p className="muted pad">读取审计日志…</p> : paged.length === 0 ? <EmptyState icon={<ScrollText size={24} />} title="暂无审计日志" /> : (
         <>

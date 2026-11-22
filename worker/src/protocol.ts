@@ -1,20 +1,8 @@
-// DSH tunnel protocol v2 — mirrors reference/dsh-mobile-server/server/relay-core/protocol-types.js
-// Frame: [type:1B][id:4B BE][length:4B BE][payload]. Checked by scripts/sync-reference.mjs.
+// DSH tunnel protocol v2 — protocol constants generated from protocol/upstream.lock.json
+// via scripts/sync-protocol.mjs (mirrors WNLUO/dsh-mobile-server/server/relay-core/protocol-types.js).
 
-export const T = {
-  register: 0x01, registered: 0x02, updatePairing: 0x03,
-  httpRequest: 0x04, httpBody: 0x05, httpHead: 0x06, httpChunk: 0x07, httpEnd: 0x08, httpError: 0x09,
-  wsUpgrade: 0x0a, wsOpen: 0x0b, wsError: 0x0c, wsText: 0x0d, wsBinary: 0x0e, wsClose: 0x0f,
-  ping: 0x10, pong: 0x11, pairRequest: 0x12, pairConfirm: 0x13,
-  httpCancel: 0x14, httpPause: 0x15, httpResume: 0x16,
-  sync: 0x17, revokeAll: 0x18, revokeAllAck: 0x19,
-  pushRegister: 0x1a, pushSend: 0x1b, migrate: 0x1c, blobPut: 0x1d, blobDelete: 0x1e,
-} as const
-
-export const HEADER_LEN = 9
-export const RESERVED_CLOSE_CODES = [1004, 1005, 1006, 1015]
-export const OWNED_PATHS = ['/', '/healthz', '/status', '/api/mobile/v1/health', '/api/mobile/v1/push-token', '/tunnel']
-export const MOBILE_PREFIX = '/api/mobile/v1/'
+import { HEADER_LEN, MOBILE_PREFIX, OWNED_PATHS, RESERVED_CLOSE_CODES, T } from './protocol.generated'
+export { HEADER_LEN, MOBILE_PREFIX, OWNED_PATHS, RESERVED_CLOSE_CODES, T }
 
 const enc = new TextEncoder()
 const dec = new TextDecoder()

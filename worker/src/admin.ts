@@ -693,13 +693,23 @@ export class Admin {
     if (route === '/nodes' && method === 'GET') {
       const rows = this.sql.exec('SELECT * FROM nodes ORDER BY created DESC LIMIT 200').toArray()
       return json(200, {
-        items: rows.map(r => ({
-          id: String(r.id), claimCode: String(r.claim_code), name: String(r.name), publicUrl: String(r.public_url),
-          admissionMode: String(r.admission_mode), desiredMode: String(r.desired_mode),
-          licenseCount: Number(r.license_count), deviceCount: Number(r.device_count),
-          tunnelOnline: Boolean(r.tunnel_online), lastSeenAt: r.last_seen ? Number(r.last_seen) : null,
-          revokedAt: r.revoked_at ? Number(r.revoked_at) : null, createdAt: Number(r.created),
-        })),
+        items: rows.map(r => {
+          let status: Record<string, unknown> | null = null
+          if (r.status_json) {
+            try {
+              const parsed = JSON.parse(String(r.status_json))
+              if (parsed && typeof parsed === 'object') status = parsed as Record<string, unknown>
+            } catch { /* ignore malformed legacy json */ }
+          }
+          return {
+            id: String(r.id), claimCode: String(r.claim_code), name: String(r.name), publicUrl: String(r.public_url),
+            admissionMode: String(r.admission_mode), desiredMode: String(r.desired_mode),
+            licenseCount: Number(r.license_count), deviceCount: Number(r.device_count),
+            tunnelOnline: Boolean(r.tunnel_online), lastSeenAt: r.last_seen ? Number(r.last_seen) : null,
+            revokedAt: r.revoked_at ? Number(r.revoked_at) : null, createdAt: Number(r.created),
+            status,
+          }
+        }),
       })
     }
     if (route === '/nodes' && method === 'POST') {
@@ -1061,6 +1071,8 @@ export class Admin {
 
     // ---- settings & audit ----
     if (route === '/settings' && method === 'GET') {
+      const nodesTotal = Number(this.sql.exec('SELECT COUNT(*) c FROM nodes WHERE revoked_at IS NULL').toArray()[0]?.c ?? 0)
+      const nodesOnline = Number(this.sql.exec('SELECT COUNT(*) c FROM nodes WHERE revoked_at IS NULL AND tunnel_online=1').toArray()[0]?.c ?? 0)
       return json(200, {
         colo: req.headers.get('x-aihub-colo') || 'LOCAL',
         mode: this.mode,
@@ -1075,6 +1087,10 @@ export class Admin {
         role: this.isSlave ? 'slave' : 'master',
         claimCodeSet: Boolean(this.env.PLATFORM_CLAIM_CODE?.trim()),
         masterUrl: this.env.PLATFORM_MASTER_URL ?? '',
+        nodeName: this.env.PLATFORM_NODE_NAME ?? '',
+        masterTokenSet: Boolean(this.env.PLATFORM_MASTER_TOKEN?.trim()),
+        nodesTotal,
+        nodesOnline,
         modeControlled: this.isModeControlled,
       })
     }

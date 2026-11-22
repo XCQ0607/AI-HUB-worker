@@ -1,7 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import {
   AlertCircle, AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, Check, CheckCircle2,
-  ChevronLeft, ChevronRight, Copy, HelpCircle, Info, X,
+  ChevronDown, ChevronLeft, ChevronRight, Copy, HelpCircle, Info, X,
 } from 'lucide-react'
 
 export type BadgeTone = 'ok' | 'warn' | 'bad' | 'neutral' | 'accent' | 'info' | 'purple' | 'cyan'
@@ -12,6 +12,38 @@ const ToastCtx = createContext<(text: string, kind?: ToastKind) => void>(() => {
 
 export function useToast() {
   return useContext(ToastCtx)
+}
+
+declare const __APP_VERSION__: string
+export const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.0.0'
+
+export const REPO_URL = 'https://github.com/XCQ0607/AI-HUB-worker'
+export const AUTHOR_URL = 'https://github.com/XCQ0607'
+export const LICENSE_URL = 'https://github.com/XCQ0607/AI-HUB-worker/blob/main/LICENSE'
+
+export function GitHubIcon({ size = 15 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12" />
+    </svg>
+  )
+}
+
+export function ProjectFooter({ className = '' }: { className?: string }) {
+  return (
+    <footer className={`site-footer ${className}`.trim()}>
+      <a href={REPO_URL} target="_blank" rel="noopener noreferrer" aria-label="打开 GitHub 仓库">
+        <GitHubIcon size={14} />
+        <span>GitHub</span>
+      </a>
+      <span className="site-footer-sep" aria-hidden="true">·</span>
+      <span>Copyright © 2026 <a href={AUTHOR_URL} target="_blank" rel="noopener noreferrer">XCQ0607</a></span>
+      <span className="site-footer-sep" aria-hidden="true">·</span>
+      <span>Under <a href={LICENSE_URL} target="_blank" rel="noopener noreferrer">MIT License</a></span>
+      <span className="site-footer-sep" aria-hidden="true">·</span>
+      <span>v{APP_VERSION}</span>
+    </footer>
+  )
 }
 
 export function BrandLogo({ size = 34 }: { size?: number }) {
@@ -283,6 +315,112 @@ export function Pagination({ total, page, pageSize, onChange }: {
           下一页<ChevronRight size={14} />
         </button>
       </div>
+    </div>
+  )
+}
+
+export interface SelectOption<T extends string | number = string> {
+  value: T
+  label: string
+}
+
+export function Select<T extends string | number>({
+  value,
+  onChange,
+  options,
+  style,
+  className = '',
+  placeholder = '请选择',
+  disabled = false,
+  ariaLabel,
+}: {
+  value: T
+  onChange: (value: T) => void
+  options: SelectOption<T>[]
+  style?: CSSProperties
+  className?: string
+  placeholder?: string
+  disabled?: boolean
+  ariaLabel?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [activeIndex, setActiveIndex] = useState(-1)
+  const wrapRef = useRef<HTMLDivElement>(null)
+
+  const selected = options.find(o => o.value === value)
+
+  useEffect(() => {
+    if (!open) return
+    const idx = options.findIndex(o => o.value === value)
+    setActiveIndex(idx >= 0 ? idx : 0)
+
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setOpen(false)
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setActiveIndex(i => (options.length ? (i + 1) % options.length : -1))
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setActiveIndex(i => (options.length ? (i - 1 + options.length) % options.length : -1))
+      } else if (e.key === 'Enter' && activeIndex >= 0 && options[activeIndex]) {
+        e.preventDefault()
+        onChange(options[activeIndex].value)
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [open, options, value, activeIndex, onChange])
+
+  return (
+    <div ref={wrapRef} className={`select-wrap ${open ? 'open' : ''} ${className}`.trim()} style={style}>
+      <button
+        type="button"
+        className="select-trigger"
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        onClick={() => !disabled && setOpen(o => !o)}
+      >
+        <span className={`select-label ${selected ? '' : 'muted'}`}>{selected ? selected.label : placeholder}</span>
+        <ChevronDown size={14} className="select-caret" />
+      </button>
+      {open && (
+        <div className="select-menu" role="listbox">
+          {options.map((opt, idx) => {
+            const isSelected = opt.value === value
+            const isActive = idx === activeIndex
+            return (
+              <button
+                key={String(opt.value)}
+                type="button"
+                role="option"
+                aria-selected={isSelected}
+                className={`select-option ${isSelected ? 'selected' : ''} ${isActive ? 'active' : ''}`.trim()}
+                onMouseEnter={() => setActiveIndex(idx)}
+                onClick={() => {
+                  onChange(opt.value)
+                  setOpen(false)
+                }}
+              >
+                <span className="select-option-label">{opt.label}</span>
+                {isSelected && <Check size={14} className="select-check" />}
+              </button>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

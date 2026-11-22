@@ -6,7 +6,7 @@ All notable changes to **AI-HUB-worker** (`XCQ0607/AI-HUB-worker`) will be docum
 
 ### 协议对齐与隧道核心
 
-- **上游协议 v0.1.30 对齐（`0x01`–`0x1E`）**：保持 `HEADER_LEN = 9` 与全部 30 个二值帧指令，不新增 `0x1F+` 私有指令；`.github/upstream-baseline.json` 基线为 `e729dd85 / v0.1.30`。拦截 `/api/relay/**` 控制面路径，对齐无头 `/api/mobile/v1/pair` 的 `503` JSON 响应。
+- **上游协议 v0.1.30 对齐（`0x01`–`0x1E`）**：保持 `HEADER_LEN = 9` 与全部 30 个二值帧指令，不新增 `0x1F+` 私有指令；`protocol/upstream.lock.json` 锁定基线为 `e729dd85 / v0.1.30`。拦截 `/api/relay/**` 控制面路径，对齐无头 `/api/mobile/v1/pair` 的 `503` JSON 响应。
 - **注册帧与拒绝语义**：`0x01 register` 支持 `secret` / `version` / `license` 校验（不再读 `pairingCode`）；`0x0C wsError` 在 `id=0` 时返回 `bad_register_secret` / `plugin_too_old` / `instance_mismatch`；`0x0F wsClose` 解析 2 字节 code 与可选 UTF-8 reason。
 - **压缩响应透传**：Durable Object 侧对已带 `content-encoding` 的上游响应启用 `encodeBody: 'manual'`（外层 Worker 保持 `automatic` 以匹配 `DO.fetch()` 跨边界自动解压），修复二次压缩导致首次配对 `HTTP 200` 解析失败。
 - **blob 分片上传**：绑定 R2 时 `0x02 registered` 下发 `blobUpload: { maxChunkBytes, maxBlobBytes }`；`0x1D blobPut` 支持非零 `id` 的逐片收片与 ack，校验首片 `offset = 0`、`offset === nextOffset`、非尾片 `offset + 片长 < total`、尾片 `offset + 片长 === total`。未绑定 R2 或宿主不支持时回退 `id=0` 整包语义。
@@ -27,7 +27,7 @@ All notable changes to **AI-HUB-worker** (`XCQ0607/AI-HUB-worker`) will be docum
 - **24 小时流量遥测**：按小时记录请求数、上下行字节、离线镜像命中与高流量实例排行，对照 Cloudflare 每日 100k 免费额度可视化水位。
 - **连接诊断与接入向导**：`/healthz` → `/api/mobile/v1/health` → 非污染 `/tunnel?diag=` WSS 握手三步探测；接入向导输出桌面插件与无头 CLI 两种配置方式。
 - **迁移台账（`0x1C`）**：宿主换中转前登记目标地址，手机收到 `503 migrated` 与 `x-dsh-migrated-to` 后自动切换；支持控制台手动登记与撤销。
-- **节点联邦**：主控端生成认领码集中查看被控节点状态并下发准入模式，被控端按周期上报。
+- **节点联邦**：主控端生成认领码集中查看被控节点状态并下发准入模式，被控端按周期上报；支持上报区域标签（`DO_LOCATION`）、在线宿主数与实例摘要、24h 请求与流量、R2 存储、离线镜像及超时告警，支持一键跳转对应节点控制台。
 - **审计日志**：记录管理动作、登录与准入变更，支持按类别筛选与 CSV / JSON 导出。
 
 ### 控制台
@@ -37,8 +37,8 @@ All notable changes to **AI-HUB-worker** (`XCQ0607/AI-HUB-worker`) will be docum
 
 ### 工程与发布
 
-- **部署脚本**：`scripts/deploy.mjs` 支持 JSONC 注释解析、代理穿透、自动回填 `env.json` 与 `deploy-output.json`，首次部署自动生成 `ADMIN_TOKEN` 并初始化管理员。
-- **协议守护**：`.github/upstream-baseline.json` 快照 + `scripts/sync-reference.mjs`（`--ci` / `--ref-dir` / `--remote` / `--update-baseline`）检测协议漂移。
-- **GitHub Actions**：`ci.yml` 执行依赖安装、脚本语法、协议基线、类型检查、前端构建与 `wrangler deploy --dry-run`；`upstream-watch.yml` 每日比对上游并在变化或漂移时开 issue；`release.yml` 支持 Tag 与手动覆盖发布，产出可部署包与源码包及 `SHA256SUMS.txt`。
-- **发布包修正**：可部署包只包含 `scripts/deploy.mjs`，`sync-reference.mjs` 改随源码包分发（部署包内缺基线快照与 `reference/`，运行必报找不到基线）。
-- **模板与卫生**：`env-template.json` 移除个人邮箱并补全可选变量；`.gitignore` 覆盖 `.env*`、`.dev.vars*`、`*.tsbuildinfo`、`*.p8` / `*.pem` / `*.key`、`Thumbs.db`；修复 `release.yml` 打标发布时的贡献者对比区间。
+- **部署脚本**：`scripts/deploy.mjs` 支持 JSONC 注释解析、`--env` 多配置文件与 `--profile` / `WRANGLER_PROFILE` 原生多账号隔离、代理穿透、自动识别已绑定的 Cloudflare 自定义域名并优先回填 `env*.json` 与 `deploy-output.json`，首次部署自动生成 `ADMIN_TOKEN` 并初始化管理员。
+- **协议同步与代码生成**：采用 Lockfile + Codegen 架构，以 `protocol/upstream.lock.json` 为单一事实来源，通过 `scripts/sync-protocol.mjs`（`npm run protocol:sync` / `npm run protocol:check`）直连 GitHub 同步上游协议并确定性生成 `worker/src/protocol.generated.ts`（由 `worker/src/protocol.ts` 导入并透传导出），移除旧的 `scripts/sync-reference.mjs`、`.github/upstream-baseline.json` 与 `.dev/reference-sync.json`，不再依赖本地 `reference/` 克隆。
+- **GitHub Actions**：`ci.yml` 执行依赖安装、脚本语法、`npm run protocol:check` 离线校验、类型检查、前端构建与 `wrangler deploy --dry-run`；`upstream-watch.yml` 每日直连上游巡检并输出中文摘要与上游源码 Compare 对比链接，正常更新时自动校验并创建/更新中文同步 PR（`chore/protocol-sync`），遇到协议约束异常时阻止 PR 并自动创建/更新中文告警 Issue；`release.yml` 支持 Tag 与手动覆盖发布，产出可部署包、源码包及 `SHA256SUMS.txt`。
+- **发布包结构**：可部署包仅包含 `scripts/deploy.mjs`，`scripts/sync-protocol.mjs` 与 `protocol/` 锁文件目录随完整源码包分发。
+- **模板与卫生**：`env-template.json` 移除个人邮箱并补全可选变量；`.gitignore` 覆盖 `env*.json`、`.env*`、`.dev.vars*`、`*.tsbuildinfo`、`*.p8` / `*.pem` / `*.key`、`Thumbs.db`；修复 `release.yml` 打标发布时的贡献者对比区间。

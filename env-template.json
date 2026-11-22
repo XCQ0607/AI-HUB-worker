@@ -7,7 +7,7 @@
   "CLOUDFLARE_ACCOUNT_ID": "",
   "WORKER_NAME": "ai-hub-relay",
   "PUBLIC_BASE_URL": "",
-  "_PUBLIC_BASE_URL": "可选；留空则部署后自动回填为 workers.dev 地址，绑定自定义域名时可填写 https://your-domain.com",
+  "_PUBLIC_BASE_URL": "可选；留空或为 workers.dev 时优先自动识别并回填已绑定的自定义域名，否则回填 workers.dev 地址；也可手动填写 https://your-domain.com",
   "DO_LOCATION": "",
   "_DO_LOCATION": "可选，Durable Object 区域提示：wnam / enam / sam / weur / eeur / apac / oc / afr / me",
   "ADMIN_EMAIL": "admin@example.com",

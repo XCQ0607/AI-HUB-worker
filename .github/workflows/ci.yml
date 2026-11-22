@@ -40,10 +40,10 @@ jobs:
       - name: Verify script syntax
         run: |
           node --check scripts/deploy.mjs
-          node --check scripts/sync-reference.mjs
+          node --check scripts/sync-protocol.mjs
 
-      - name: Verify protocol baseline (0x01-0x1E)
-        run: node scripts/sync-reference.mjs --check --ci
+      - name: Verify protocol lock & codegen
+        run: npm run protocol:check
 
       - name: Typecheck (worker & web)
         run: npm run typecheck

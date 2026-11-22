@@ -154,7 +154,9 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
             <div className="kv-row"><span className="muted">OTA 发布令牌 (PLATFORM_OTA_CONTROL_TOKEN)</span>
               <Badge tone={data.otaTokenSet ? 'ok' : 'neutral'}>{data.otaTokenSet ? '已配置' : '仅管理员面板可用'}</Badge></div>
             <div className="kv-row"><span className="muted">联邦角色</span>
-              <Badge tone="accent">{data.role === 'slave' ? `被控端 → ${data.masterUrl}` : '主控 / 单机'}</Badge></div>
+              <Badge tone="accent">{data.role === 'slave'
+                ? `被控端${data.nodeName ? ` (${data.nodeName})` : ''} → ${data.masterUrl}`
+                : (data.nodesTotal > 0 ? `主控端 (${data.nodesOnline ?? 0}/${data.nodesTotal} 在线)` : '单机模式 (暂无被控节点)')}</Badge></div>
           </div>
         </Card>
       </div>

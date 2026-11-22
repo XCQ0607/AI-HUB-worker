@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// One-command deploy:  node scripts/deploy.mjs
+// One-command deploy:  node scripts/deploy.mjs [--env env2.json] [--profile slave]
 // Auth (first match wins): CLOUDFLARE_API_TOKEN | CLOUDFLARE_EMAIL + CLOUDFLARE_API_KEY | existing `wrangler login` session.
-// Config comes from env.json (gitignored); real environment variables take priority.
+// Config comes from env.json by default (or --env / ENV_FILE; gitignored); real environment variables take priority.
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 export function parseJsonc(str) {
@@ -67,14 +67,34 @@ export async function main() {
   const base = join(dirname(fileURLToPath(import.meta.url)), '..')
   const worker = join(base, 'worker'), web = join(base, 'web')
   const env = { ...process.env }
-  const envFile = join(base, 'env.json')
+  let cliEnv = '', cliProfile = ''
+  const argv = process.argv.slice(2)
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]
+    if (a === '--env' || a === '-e') {
+      if (!argv[i + 1]) throw new Error(`Missing value for ${a}`)
+      cliEnv = argv[++i]
+    } else if (a.startsWith('--env=')) { cliEnv = a.slice(6) }
+    else if (a.startsWith('-e=')) { cliEnv = a.slice(3) }
+    else if (a === '--profile' || a === '-p') {
+      if (!argv[i + 1]) throw new Error(`Missing value for ${a}`)
+      cliProfile = argv[++i]
+    } else if (a.startsWith('--profile=')) { cliProfile = a.slice(10) }
+    else if (a.startsWith('-p=')) { cliProfile = a.slice(3) }
+  }
+  const explicitEnv = Boolean(cliEnv || process.env.ENV_FILE)
+  const envArg = cliEnv || process.env.ENV_FILE || 'env.json'
+  const envFile = resolve(base, envArg)
+  const envLabel = basename(envFile)
+  if (explicitEnv && !existsSync(envFile)) throw new Error(`Config file not found: ${envFile}`)
   if (existsSync(envFile)) {
     for (const [k, v] of Object.entries(parseJsonc(readFileSync(envFile, 'utf8')))) {
       if (!k.startsWith('_') && v !== '' && v != null && !env[k]) env[k] = String(v)
     }
-    console.log('Loaded config from env.json')
+    console.log(`Loaded config from ${envLabel}`)
   }
   const name = env.WORKER_NAME || 'ai-hub-relay'
+  const wranglerProfile = cliProfile || env.WRANGLER_PROFILE || ''
   function run(cmd, args, { cwd = worker, input, allowFail, retries = 1 } = {}) {
     let r
     for (let i = 0; i < retries; i++) {
@@ -86,6 +106,7 @@ export async function main() {
     if (!allowFail) { console.error(r.stdout, r.stderr); throw new Error(`${cmd} ${args.join(' ')} failed`) }
     return r
   }
+  const wrangler = (args, opts) => run('npx', ['wrangler', ...args, ...(wranglerProfile ? ['--profile', wranglerProfile] : [])], opts)
   const step = (n, t) => console.log(`\n[${n}/6] ${t}`)
 
   let cachedClient = null
@@ -104,7 +125,7 @@ export async function main() {
   let headers = null
   if (env.CLOUDFLARE_API_TOKEN) headers = { Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` }
   else if (env.CLOUDFLARE_EMAIL && env.CLOUDFLARE_API_KEY) headers = { 'X-Auth-Email': env.CLOUDFLARE_EMAIL, 'X-Auth-Key': env.CLOUDFLARE_API_KEY }
-  console.log('Auth mode:', env.CLOUDFLARE_API_TOKEN ? 'API Token' : headers ? 'Global API Key' : 'wrangler OAuth')
+  console.log('Auth mode:', env.CLOUDFLARE_API_TOKEN ? 'API Token' : headers ? 'Global API Key' : `wrangler OAuth${wranglerProfile ? ` (profile: ${wranglerProfile})` : ''}`)
   // wrangler reads CLOUDFLARE_EMAIL/CLOUDFLARE_API_KEY itself; clear stale email when API key is empty so OAuth works cleanly.
   if (!env.CLOUDFLARE_API_KEY) delete env.CLOUDFLARE_EMAIL
   for (const k of ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_EMAIL', 'CLOUDFLARE_API_KEY']) if (!env[k]) delete env[k]
@@ -120,9 +141,30 @@ export async function main() {
     return j.result
   }
   function oauthHeaders() {
-    const r = run('npx', ['wrangler', 'auth', 'token'], { allowFail: true })
+    const r = wrangler(['auth', 'token'], { allowFail: true })
     const tok = (r.stdout || '').trim().split(/\r?\n/).pop()?.trim()
     return tok && tok.length > 20 ? { Authorization: `Bearer ${tok}` } : null
+  }
+  const isWorkersDev = u => /^https?:\/\/[^/]+\.workers\.dev(?:\/|$)/i.test(String(u || '').trim())
+  let cachedCfHeaders
+  function getCfHeaders() {
+    if (cachedCfHeaders === undefined) cachedCfHeaders = headers ?? oauthHeaders() ?? null
+    return cachedCfHeaders
+  }
+  async function detectCustomDomain(accountId, serviceName) {
+    if (!accountId || !serviceName) return null
+    const h = getCfHeaders()
+    if (!h) return null
+    try {
+      const list = await cf(`/accounts/${encodeURIComponent(accountId)}/workers/domains?service=${encodeURIComponent(serviceName)}`, h)
+      if (!Array.isArray(list)) return null
+      const matched = list.filter(d => d && d.service === serviceName && d.enabled !== false && d.hostname)
+      const pick = matched.find(d => !d.environment || d.environment === 'production') || matched[0]
+      return pick ? `https://${String(pick.hostname).replace(/^https?:\/\//i, '').replace(/\/+$/, '')}` : null
+    } catch (e) {
+      console.log(`  cannot auto-detect custom domain (${e.message}); falling back to workers.dev`)
+      return null
+    }
   }
   const npmInstallArgs = dir => [existsSync(join(dir, 'package-lock.json')) ? 'ci' : 'install', '--no-audit', '--no-fund']
 
@@ -138,7 +180,7 @@ export async function main() {
   let acct = env.CLOUDFLARE_ACCOUNT_ID
   if (!acct) {
     try {
-      const list = await cf('/accounts', headers ?? oauthHeaders() ?? {})
+      const list = await cf('/accounts', getCfHeaders() ?? {})
       if (list.length === 1) acct = list[0].id
       else throw new Error(`found ${list.length} accounts: ${list.map(a => `${a.name}=${a.id}`).join(', ')}`)
     } catch (e) { console.log(`  cannot auto-detect account (${e.message}); set CLOUDFLARE_ACCOUNT_ID if wrangler complains`) }
@@ -146,6 +188,13 @@ export async function main() {
   if (acct) { env.CLOUDFLARE_ACCOUNT_ID = acct; console.log('  account', acct) }
 
   step(3, 'R2 bucket (optional, for history blobs)')
+  const configuredUrl = env.PUBLIC_BASE_URL ? env.PUBLIC_BASE_URL.trim().replace(/\/+$/, '') : ''
+  let detectedCustomUrl = null
+  if (!configuredUrl || isWorkersDev(configuredUrl)) {
+    detectedCustomUrl = await detectCustomDomain(acct, name)
+    if (detectedCustomUrl) console.log('  detected custom domain:', detectedCustomUrl)
+  }
+  const preferredUrl = detectedCustomUrl || (configuredUrl && !isWorkersDev(configuredUrl) ? configuredUrl : '')
   const cfg = parseJsonc(readFileSync(join(worker, 'wrangler.jsonc'), 'utf8'))
   cfg.name = name
   cfg.vars = {
@@ -162,14 +211,15 @@ export async function main() {
     'PLATFORM_CLAIM_CODE',
     'PLATFORM_NODE_NAME',
     'PLATFORM_REPORT_INTERVAL_SECONDS',
-    'PUBLIC_BASE_URL',
   ]) {
     if (env[k]) cfg.vars[k] = env[k]
   }
+  const initialPublicUrl = preferredUrl || configuredUrl
+  if (initialPublicUrl) cfg.vars.PUBLIC_BASE_URL = initialPublicUrl
   let r2 = 'disabled'
   if (env.ENABLE_R2 !== '0') {
     const bucket = env.R2_BUCKET || 'ai-hub-blob'
-    const r = run('npx', ['wrangler', 'r2', 'bucket', 'create', bucket], { allowFail: true })
+    const r = wrangler(['r2', 'bucket', 'create', bucket], { allowFail: true })
     const out = (r.stdout || '') + (r.stderr || '')
     if (r.status === 0 || /already exists/i.test(out)) { cfg.r2_buckets = [{ binding: 'BLOB', bucket_name: bucket }]; r2 = bucket }
     else console.log('  R2 unavailable (not enabled on this account?) -> blobs disabled.', out.split('\n').find(l => /error/i.test(l)) ?? '')
@@ -178,12 +228,19 @@ export async function main() {
   writeFileSync(genFile, JSON.stringify(cfg, null, 2))
 
   step(4, 'deploy worker')
-  const dep = run('npx', ['wrangler', 'deploy', '-c', 'wrangler.generated.json'], { retries: 3 })
-  const url = /https:\/\/[^\s]+workers\.dev/.exec(dep.stdout + dep.stderr)?.[0] || (env.PUBLIC_BASE_URL ? env.PUBLIC_BASE_URL.replace(/\/+$/, '') : undefined)
-  console.log('  ', url ?? '(workers.dev URL not detected)')
+  const dep = wrangler(['deploy', '-c', 'wrangler.generated.json'], { retries: 3 })
+  const workersDevUrl = /https:\/\/[^\s]+workers\.dev/.exec(dep.stdout + dep.stderr)?.[0]?.replace(/\/+$/, '')
+  const url = preferredUrl || workersDevUrl || configuredUrl || undefined
+  console.log('  ', url ?? '(worker URL not detected)')
+  if (url && cfg.vars.PUBLIC_BASE_URL !== url) {
+    cfg.vars.PUBLIC_BASE_URL = url
+    writeFileSync(genFile, JSON.stringify(cfg, null, 2))
+    console.log('  syncing auto-detected PUBLIC_BASE_URL into worker vars')
+    wrangler(['deploy', '-c', 'wrangler.generated.json'], { retries: 3 })
+  }
 
   step(5, 'secrets')
-  const listed = run('npx', ['wrangler', 'secret', 'list', '-c', 'wrangler.generated.json', '--format', 'json'], { allowFail: true })
+  const listed = wrangler(['secret', 'list', '-c', 'wrangler.generated.json', '--format', 'json'], { allowFail: true })
   const existing = new Set((() => { try { return JSON.parse(listed.stdout).map(s => s.name) } catch { return [] } })())
   const secrets = {}
   let adminToken = env.ADMIN_TOKEN
@@ -194,19 +251,22 @@ export async function main() {
   if (Object.keys(secrets).length) {
     const tmp = join(worker, '.secrets.tmp.json')
     writeFileSync(tmp, JSON.stringify(secrets))
-    try { run('npx', ['wrangler', 'secret', 'bulk', '.secrets.tmp.json', '-c', 'wrangler.generated.json'], { retries: 3 }) } finally { try { unlinkSync(tmp) } catch { } }
+    try { wrangler(['secret', 'bulk', '.secrets.tmp.json', '-c', 'wrangler.generated.json'], { retries: 3 }) } finally { try { unlinkSync(tmp) } catch { } }
   }
   if (existsSync(envFile)) {
     const c = parseJsonc(readFileSync(envFile, 'utf8'))
     const filled = []
     const fill = (k, v) => { if (v && !c[k]) { c[k] = v; filled.push(k) } }
     fill('CLOUDFLARE_ACCOUNT_ID', acct)
-    fill('PUBLIC_BASE_URL', url)
+    if (url && (!c.PUBLIC_BASE_URL || (isWorkersDev(c.PUBLIC_BASE_URL) && !isWorkersDev(url)))) {
+      c.PUBLIC_BASE_URL = url
+      filled.push('PUBLIC_BASE_URL')
+    }
     if (r2 !== 'disabled') fill('R2_BUCKET', r2)
     fill('ADMIN_TOKEN', secrets.ADMIN_TOKEN || adminToken)
     if (filled.length) {
       writeFileSync(envFile, JSON.stringify(c, null, 2) + '\n')
-      console.log('  backfilled into env.json:', filled.join(', '))
+      console.log(`  backfilled into ${envLabel}:`, filled.join(', '))
     }
   }
 
@@ -229,7 +289,7 @@ export async function main() {
     }
   }
   writeFileSync(join(base, 'deploy-output.json'), JSON.stringify(out, null, 2))
-  console.log(`\nDone -> ${url ?? ''}\nConsole: ${url ?? ''}/platform/   Tunnel: ${(url ?? '').replace('https', 'wss')}/tunnel\nSummary saved to deploy-output.json (gitignored).`)
+  console.log(`\nDone -> ${url ?? ''}\nConsole: ${url ?? ''}/platform/   Tunnel: ${(url ?? '').replace('https', 'wss')}/tunnel\nSummary saved to deploy-output.json`)
 }
 
 const isMain = process.argv[1] && resolve(process.argv[1]).toLowerCase() === fileURLToPath(import.meta.url).toLowerCase()

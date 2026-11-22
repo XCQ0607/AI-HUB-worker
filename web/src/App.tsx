@@ -3,7 +3,7 @@ import {
   Database, KeyRound, LayoutDashboard, LogOut, Menu, Moon, Network, Package, Plug, ScrollText, Settings, Sun, X,
 } from 'lucide-react'
 import { api } from './api'
-import { BrandLogo, ToastProvider, useToast } from './components/ui'
+import { APP_VERSION, BrandLogo, GitHubIcon, ProjectFooter, REPO_URL, ToastProvider, useToast } from './components/ui'
 import { Audit } from './pages/Audit'
 import { Licenses } from './pages/Licenses'
 import { Nodes } from './pages/Nodes'
@@ -98,6 +98,7 @@ function Login({ onDone }: { onDone: () => void }) {
           </div>
         </div>
       </div>
+      <ProjectFooter className="login-footer" />
     </div>
   )
 }
@@ -151,7 +152,7 @@ function Shell() {
     <div className="shell">
       <aside className={`sidebar ${menuOpen ? 'open' : ''}`}>
         <div className="brand-row">
-          <div className="brand"><BrandLogo size={32} /><div><h2>AI-HUB</h2><small className="muted">Worker Relay</small></div></div>
+          <div className="brand"><BrandLogo size={32} /><div><h2>AI-HUB</h2><small className="muted">Worker Relay · v{APP_VERSION}</small></div></div>
           <button className="icon-btn mobile-only" aria-label="关闭侧边栏" onClick={() => setMenuOpen(false)}><X size={18} /></button>
         </div>
         <nav className="nav">
@@ -169,7 +170,10 @@ function Shell() {
         <div className="foot">
           <div className="user-pill" title={me}>{me}</div>
           <div className="foot-act">
-            <button className="icon-btn" title="切换主题" aria-label={dark ? '切换为浅色主题' : '切换为深色主题'} onClick={() => setDark(!dark)}>{dark ? <Sun size={15} /> : <Moon size={15} />}</button>
+            <div className="btn-row">
+              <button className="icon-btn" title="切换主题" aria-label={dark ? '切换为浅色主题' : '切换为深色主题'} onClick={() => setDark(!dark)}>{dark ? <Sun size={15} /> : <Moon size={15} />}</button>
+              <a className="icon-btn" href={REPO_URL} target="_blank" rel="noopener noreferrer" title="GitHub 仓库" aria-label="打开 GitHub 仓库"><GitHubIcon size={15} /></a>
+            </div>
             <button className="btn-ghost btn-sm" onClick={async () => { await api('/auth/logout', { method: 'POST' }); setMe(null) }}>
               <LogOut size={14} />退出登录
             </button>
@@ -179,13 +183,16 @@ function Shell() {
       {menuOpen && <div className="scrim mobile-only" onClick={() => setMenuOpen(false)} />}
 
       <main className="main">
-        <header className="topbar">
-          <div className="btn-row">
-            <button className="icon-btn mobile-only" aria-label="打开导航菜单" onClick={() => setMenuOpen(true)}><Menu size={18} /></button>
-            <h1>{currentTitle}</h1>
-          </div>
-        </header>
-        {renderPage()}
+        <div className="main-body">
+          <header className="topbar">
+            <div className="btn-row">
+              <button className="icon-btn mobile-only" aria-label="打开导航菜单" onClick={() => setMenuOpen(true)}><Menu size={18} /></button>
+              <h1>{currentTitle}</h1>
+            </div>
+          </header>
+          {renderPage()}
+        </div>
+        <ProjectFooter className="main-footer" />
       </main>
     </div>
   )

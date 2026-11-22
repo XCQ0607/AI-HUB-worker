@@ -3,10 +3,15 @@
   <h1>AI-HUB Worker</h1>
   <p>基于 Cloudflare Workers + Durable Objects 的远程 AI 桌面中转与配套管理控制台</p>
 
+  [![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FXCQ0607%2FAI-HUB-worker%2Fmain%2Fpackage.json&query=%24.version&prefix=v&label=version&color=6C8CFF)](./package.json)
   [![License](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
   [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers%20%2B%20Durable%20Objects-F38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
+  [![TypeScript](https://img.shields.io/badge/TypeScript-5.6+-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
   [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
+  [![Vite](https://img.shields.io/badge/Vite-6-646CFF?logo=vite&logoColor=white)](https://vite.dev/)
   [![Protocol](https://img.shields.io/badge/Protocol-v2%20(0x01--0x1E)-10B981)](./worker/src/protocol.ts)
+  [![GitHub stars](https://img.shields.io/github/stars/XCQ0607/AI-HUB-worker?style=flat&logo=github)](https://github.com/XCQ0607/AI-HUB-worker/stargazers)
+  [![GitHub last commit](https://img.shields.io/github/last-commit/XCQ0607/AI-HUB-worker?logo=github)](https://github.com/XCQ0607/AI-HUB-worker/commits/main)
 </div>
 
 上游 [WNLUO/dsh-mobile-server](https://github.com/WNLUO/dsh-mobile-server) 用 Rust 实现中转，需要一台常驻服务器并自行处理证书与端口暴露。本项目把中转层改写为 Cloudflare Workers + Durable Objects：不需要自有服务器、公网 IP 或证书，可在 Cloudflare 免费额度内运行。
@@ -64,49 +69,157 @@
 
 ## 部署
 
-前置条件：Node.js ≥ 20，Cloudflare 账号。
+前置条件：Node.js ≥ 20，Cloudflare 账号（免费版即可运行 Workers + Durable Objects SQLite；如需历史密文 Blob 与插件 OTA，需在 Cloudflare 后台开通 R2）。
+
+### 快速部署
 
 ```bash
 git clone https://github.com/XCQ0607/AI-HUB-worker.git && cd AI-HUB-worker
-cp env-template.json env.json      # 编辑 env.json（已被 .gitignore，不会提交）
+cp env-template.json env.json      # 按需填写配置（所有 env*.json 均已被 .gitignore 忽略）
+npx wrangler login                 # 若使用 OAuth 登录；改用 API Token / Global Key 时可跳过
 node scripts/deploy.mjs
 ```
 
-### 配置
+`scripts/deploy.mjs` 按顺序完成 6 个步骤：
 
-`deploy.mjs` 优先读系统环境变量，其次读 `env.json`（支持 JSONC 注释，`_` 开头的字段忽略）。首次部署后自动生成缺失的 `ADMIN_TOKEN`，并回填 `CLOUDFLARE_ACCOUNT_ID`、`PUBLIC_BASE_URL`、`R2_BUCKET`。
+1. **依赖与前端构建**：在 `worker/`、`web/` 安装依赖，并构建 React 管理控制台到 `worker/public/platform/`（二次部署可传 `SKIP_INSTALL=1` 跳过安装）。
+2. **账号解析**：若未配置 `CLOUDFLARE_ACCOUNT_ID`，调用 Cloudflare API 自动识别唯一账号。
+3. **域名探测、R2 与配置生成**：优先探测当前 Worker 已绑定的自定义域，尝试创建/复用 R2 桶（账号未开通 R2 时自动跳过），生成 `worker/wrangler.generated.json`。
+4. **发布 Worker**：执行 `wrangler deploy`；若首次部署自动探测到的 `PUBLIC_BASE_URL` 尚未写入运行时变量，会自动再同步发布一次。
+5. **写入密钥与配置回填**：批量写入 Worker Secrets（如 `ADMIN_TOKEN`、`TUNNEL_REGISTER_SECRET`、`APNS_*` 等），并将 `CLOUDFLARE_ACCOUNT_ID`、`PUBLIC_BASE_URL`、`R2_BUCKET`、`ADMIN_TOKEN` 回填到当前使用的 `env*.json`。
+6. **初始化管理员**：等待 6 秒后调用 `POST <url>/api/platform/v1/admin/bootstrap` 创建/更新管理员账号，并把本次摘要写入 `deploy-output.json`（已被 `.gitignore` 忽略）。
 
-**部署与安全**：
+**常用运行参数**：
+
+```bash
+# 指定其它配置文件（支持 --env / -e 或环境变量 ENV_FILE，默认 env.json）
+node scripts/deploy.mjs --env env2.json
+
+# 已有 node_modules 时跳过依赖安装，加快重部署
+SKIP_INSTALL=1 node scripts/deploy.mjs                  # Linux / macOS
+```
+
+```powershell
+# Windows PowerShell：开启本地代理并跳过依赖安装部署指定节点
+$env:HTTPS_PROXY="http://127.0.0.1:10808"; $env:HTTP_PROXY="http://127.0.0.1:10808"
+$env:SKIP_INSTALL="1"
+node scripts/deploy.mjs --env env2.json
+```
+
+> **代理**：网络受限时设置 `HTTP_PROXY` / `HTTPS_PROXY`，`wrangler`、Cloudflare API 探测以及 Step 6 的管理员初始化请求都会自动沿用代理。若账号自动探测仍失败，直接在配置文件中显式填写 `CLOUDFLARE_ACCOUNT_ID`。
+
+### Cloudflare 认证方式
+
+`deploy.mjs` 支持三种认证方式，按以下优先级生效（**三选一**）：
+
+| 优先级 | 方式 | 配置方法 | 适用场景 |
+| --- | --- | --- | --- |
+| 1 | API Token | 填写 `CLOUDFLARE_API_TOKEN` | 跨多账号部署、CI/CD、最小权限隔离 |
+| 2 | Global API Key | 同时填写 `CLOUDFLARE_EMAIL` + `CLOUDFLARE_API_KEY`（`CLOUDFLARE_API_TOKEN` 留空） | 已有 Global Key 的个人环境 |
+| 3 | Wrangler OAuth | 以上三项全留空，提前执行 `npx wrangler login` | 单账号本机交互式部署（最省心） |
+
+- **OAuth 权限说明**：`wrangler login` 的默认权限完整覆盖账号查询、自定义域识别、R2 桶创建、Worker / Durable Object 部署与 Secrets 管理，单账号下无需额外申请 API Token。
+- **自定义 API Token 最小权限**：若使用 API Token，授予 **Account Settings: Read**、**Workers Scripts: Edit**、**Workers R2 Storage: Edit**（启用 R2 时）即可。
+- **凭据安全边界**：`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_EMAIL`、`CLOUDFLARE_API_KEY` 仅在本地脚本内存与临时 `wrangler` 子进程环境中使用，**不会**写入 `wrangler.generated.json`、`deploy-output.json`，也**不会**上传为 Worker 环境变量或 Secrets，亦不会由脚本回填进 `env*.json`。
+
+### 区域设置（`DO_LOCATION`）
+
+Worker 入口代码在全球边缘节点自动就近执行；真正有区域归属的是承载隧道状态与 SQLite 数据库的单例 **Durable Object（`Hub`）**。通过 `DO_LOCATION` 可向 Cloudflare 提供 `locationHint`：
+
+| 取值 | 区域说明 |
+| --- | --- |
+| `apac` | 亚太海外（通常落在东京 / 新加坡等，亚洲访问延迟较低） |
+| `wnam` / `enam` | 北美西部（美西）/ 北美东部（美东） |
+| `weur` / `eeur` | 西欧 / 东欧 |
+| `sam` / `oc` / `afr` / `me` | 南美 / 大洋洲 / 非洲 / 中东 |
+
+> **注意**：Cloudflare 的 `locationHint` **仅在 Durable Object 首次创建时生效**。部署并产生首次请求后，再修改 `DO_LOCATION` 不会原地迁移已有 DO；如需更换区域，请改用新的 `WORKER_NAME` 重新部署。
+
+### 自定义域名与地址自动回填
+
+`deploy.mjs` 解析 `PUBLIC_BASE_URL` 遵循以下优先级：
+
+1. 配置文件中已手动填写的非 `workers.dev` 自定义域名（始终尊重，不覆盖）；
+2. 自动探测到的当前 Worker 已绑定且启用的 Cloudflare Custom Domain（优先 `production` 环境）；
+3. `wrangler deploy` 输出的 `https://<worker>.<subdomain>.workers.dev` 地址。
+
+推荐流程：首次部署完成后，在 Cloudflare Dashboard → **Workers & Pages → 你的 Worker → Settings → Domains & Routes（域）** 添加自定义域，然后重新运行一次 `node scripts/deploy.mjs`（或加 `--env <文件>`）。脚本会自动识别新绑定的域名，将其同步到 Worker 的 `PUBLIC_BASE_URL` 变量，把原回填的 `*.workers.dev` 升级为自定义域名，并使用自定义域名完成 Step 6 初始化。
+
+### 完整配置项
+
+`deploy.mjs` 优先读取系统环境变量，其次读取指定的 `env*.json`（默认 `env.json`，支持 JSONC 注释与尾随逗号，`_` 开头的说明字段自动忽略）。
+
+**部署、认证与安全**：
 
 | 变量 | 说明 |
 | --- | --- |
-| `CLOUDFLARE_API_TOKEN` 或 `CLOUDFLARE_EMAIL` + `CLOUDFLARE_API_KEY` | Cloudflare 凭据；全留空则使用 `npx wrangler login` 的 OAuth 会话 |
-| `CLOUDFLARE_ACCOUNT_ID` | 账号 ID；多账号或代理环境下建议显式填写 |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare API Token（优先级最高） |
+| `CLOUDFLARE_EMAIL` / `CLOUDFLARE_API_KEY` | Cloudflare 登录邮箱与 Global API Key（需同时填写） |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare 账号 ID；多账号、跨账号或代理环境下建议显式填写，首次部署可自动回填 |
 | `WORKER_NAME` | Worker 名称，默认 `ai-hub-relay` |
-| `PUBLIC_BASE_URL` | 对外地址；留空时部署后回填 `workers.dev` 地址，绑定自定义域名时填 `https://<domain>` |
-| `DO_LOCATION` | Durable Object 区域提示（`wnam` / `enam` / `sam` / `weur` / `eeur` / `apac` / `oc` / `afr` / `me`） |
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | 首个管理员账号（密码 ≥ 12 位），部署后调用 `POST /api/platform/v1/admin/bootstrap` 初始化 |
-| `ADMIN_TOKEN` | 管理 API Bearer 令牌（建议 ≥ 16 位）；留空时自动生成 24 字节随机 Base64URL 令牌并回填 |
-| `TUNNEL_REGISTER_SECRET` | 设置后，插件须配置相同的 `registerSecret` 才能注册隧道 |
-| `TUNNEL_HEARTBEAT_MS` | 宿主心跳间隔，默认 `40000`，范围 `10000`–`60000` |
-| `ENABLE_R2` / `R2_BUCKET` | `1` 时自动创建并绑定 R2 桶（默认 `ai-hub-blob`，用于历史密文与 OTA）；账号未开通 R2 时跳过 |
-| `ADMISSION_MODE` | `open`（默认）/ `restricted`，也可在控制台实时切换 |
+| `PUBLIC_BASE_URL` | 对外地址；留空或为 `*.workers.dev` 时优先自动识别并回填已绑定的自定义域，否则回填 `workers.dev`；也可手动指定 `https://<domain>` |
+| `DO_LOCATION` | Durable Object 区域提示（`apac` / `wnam` / `enam` / `weur` / `eeur` / `sam` / `oc` / `afr` / `me`），首次部署前填写生效 |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | 首个管理员账号（密码 ≥ 12 位），Step 6 自动初始化 |
+| `ADMIN_TOKEN` | 管理 API Bearer 令牌（建议 ≥ 16 位）；留空时首次部署随机生成 24 字节 Base64URL 令牌并回填 |
+| `TUNNEL_REGISTER_SECRET` | 设置后，宿主插件须配置相同的 `registerSecret` 才能注册隧道（作为 Secret 存储） |
+| `TUNNEL_HEARTBEAT_MS` | 宿主心跳间隔（毫秒），默认 `40000`，范围 `10000`–`60000` |
+| `ENABLE_R2` / `R2_BUCKET` | `1` 时自动创建并绑定 R2 桶（默认 `ai-hub-blob`，用于历史密文与 OTA）；设为 `0` 或账号未开通 R2 时跳过 |
+| `ADMISSION_MODE` | `open`（默认）/ `restricted`，部署后也可在控制台实时切换 |
 | `MIN_PLUGIN_VERSION` | 如 `0.5.80`；低于此版本的插件注册时返回 `plugin_too_old` |
 
 **离线镜像 / APNs / OTA / 节点联邦**：
 
 | 变量 | 说明 |
 | --- | --- |
-| `MIRROR_CACHE` / `MIRROR_FALLBACK_MS` | 镜像开关（默认 `1`）与慢隧道回退延迟（默认 `0`，宿主离线时立即返回镜像） |
-| `APNS_KEY` / `APNS_KEY_ID` / `APNS_TEAM_ID` / `APNS_TOPIC` | APNs 令牌鉴权：`.p8` 私钥内容、Key ID、Team ID、App Bundle ID |
-| `PLATFORM_OTA_CONTROL_TOKEN` | 供外部 CI / 脚本调用 `/api/desktop-plugins/ota/*` 的独立令牌 |
-| `PLATFORM_MASTER_URL` / `PLATFORM_CLAIM_CODE` / `PLATFORM_MASTER_TOKEN` / `PLATFORM_NODE_NAME` / `PLATFORM_REPORT_INTERVAL_SECONDS` | 节点联邦配置；上报间隔默认 `300` 秒 |
+| `MIRROR_CACHE` / `MIRROR_FALLBACK_MS` | 离线镜像开关（默认 `1`）与慢隧道回退延迟（毫秒，默认 `0` 表示仅断线时兜底） |
+| `APNS_KEY` / `APNS_KEY_ID` / `APNS_TEAM_ID` / `APNS_TOPIC` | Apple APNs 令牌鉴权：`.p8` 私钥内容、Key ID、Team ID、App Bundle ID（均为 Secret） |
+| `PLATFORM_OTA_CONTROL_TOKEN` | 供外部 CI / 脚本调用 `/api/desktop-plugins/ota/*` 的独立令牌（Secret） |
+| `PLATFORM_MASTER_URL` | 主控端对外地址（如 `https://master.example.com`，不带 `/platform/`）；填写后本节点即运行于被控模式 |
+| `PLATFORM_CLAIM_CODE` | 主控端生成的节点认领码（`NODE-XXXX-XXXX`），须与 `PLATFORM_MASTER_URL` 同时配置才会启动上报 |
+| `PLATFORM_MASTER_TOKEN` | 可选的联邦共享密钥（Secret）；主控端若设置了该值，所有被控端须填完全一致的值 |
+| `PLATFORM_NODE_NAME` | 被控端在主控列表中的展示名称（默认 `AI-HUB Worker`） |
+| `PLATFORM_REPORT_INTERVAL_SECONDS` | 被控端上报周期（秒），默认 `300`，代码强制下限 `30` |
 
-> **代理**：网络受限时设置 `HTTP_PROXY` / `HTTPS_PROXY`（PowerShell 写法 `$env:HTTPS_PROXY="http://127.0.0.1:10808"`），`wrangler` 与 `deploy.mjs` 的初始化请求会沿用。若账号自动探测仍失败，直接在 `env.json` 填写 `CLOUDFLARE_ACCOUNT_ID`。
+**脚本控制环境变量（仅命令行生效）**：
+
+| 变量 | 说明 |
+| --- | --- |
+| `ENV_FILE` | 指定配置文件路径（等效于 `--env <文件>`，命令行参数优先级高于 `ENV_FILE`） |
+| `SKIP_INSTALL` | 设为 `1` 时跳过 `worker/` 与 `web/` 的 `npm ci` / `npm install`（仍会重新构建前端） |
+| `HTTP_PROXY` / `HTTPS_PROXY` | 代理地址（如 `http://127.0.0.1:10808`），透传给 `wrangler` 与 `deploy.mjs` 请求 |
+
+### 多节点集群部署（节点联邦）
+
+节点联邦采用 **主控端（Master）+ 被控端（Slave）** 结构，用于在一处集中观测多台独立中转的状态（在线隧道、地址、激活码与设备计数）并统一下发或交还准入模式（`open` / `restricted` / 自管）。
+
+> **架构边界**：节点联邦不是流量负载均衡集群，也不会在节点间同步激活码、管理员账号、离线镜像或 R2 密文。每台节点都是独立的 Worker + DO SQLite，宿主插件与手机 App 仍各自连接所指向的那台节点（切换中转走 `0x1C` 迁移台账）。
+
+**部署步骤**：
+
+1. **准备主控端**：任何**未填写** `PLATFORM_MASTER_URL` 的正常部署节点默认即为主控端。如需加强上报接口校验，可在主控端填写 `PLATFORM_MASTER_TOKEN` 后重部署一次。
+2. **生成认领码**：打开主控端控制台 `https://<主控域名>/platform/` → **节点联邦** → 点击 **生成认领码**，复制弹窗中生成的配置片段。
+3. **创建被控端配置文件**：复制一份模板（例如 `cp env-template.json env2.json`，所有 `env*.json` 均不会入库），填入主控端给出的联邦字段，并按场景核对隔离项：
+   - **同 Cloudflare 账号部署多个节点**：
+     - `WORKER_NAME` **必须改名**（如 `ai-hub-relay-apac`），否则会覆盖已有 Worker；
+     - `PUBLIC_BASE_URL` **留空**（自动识别自定义域或回填新地址）或填写独立域名，切勿沿用主控端 URL；
+     - `R2_BUCKET` **务必使用独立桶名**（如 `ai-hub-blob-2`），因为密文对象键不含 Worker 名称，共用桶在迁移或 7 天过期清理时会互相干扰；
+     - 按需填写 `DO_LOCATION`（如 `apac` / `wnam` / `weur`）。
+   - **跨 Cloudflare 账号部署多个节点**：
+     - 更换 `CLOUDFLARE_ACCOUNT_ID` 为目标账号 ID；
+     - 为各配置文件分别填写目标账号的 `CLOUDFLARE_API_TOKEN`（推荐），或在每次部署前执行 `npx wrangler logout && npx wrangler login` 切换本机 OAuth 账号。
+4. **部署被控端**：
+   ```bash
+   node scripts/deploy.mjs --env env2.json
+   ```
+5. **验证上报**：
+   - DO 在首次被请求（如 Step 6 的 `bootstrap` 或访问 `/healthz`）唤醒后约 5 秒发起首次上报，随后按 `PLATFORM_REPORT_INTERVAL_SECONDS` 周期上报。
+   - 在主控端控制台 **节点联邦** 页面确认该节点已显示正确的公网地址与最近上报时间；也可在被控端控制台 **概览 / 节点联邦** 检查是否存在上报错误。
+   - 主控端下发准入模式后最多存在 1 个上报周期的生效延迟；接管期间被控端本地无法修改准入模式，直到主控端点「交还」。
+   - 与单机节点不同，被控端在无隧道在线时不会取消 DO Alarm，按默认 `300` 秒计每天约 288 次请求，仍在免费额度安全范围内。
 
 ### 部署后的地址
 
-| 用途 | 地址 |
+| 用途 | 地址（绑定自定义域时替换为 `https://<domain>` / `wss://<domain>`） |
 | --- | --- |
 | 管理控制台 | `https://<worker>.workers.dev/platform/` |
 | 手机 App 中转 | `https://<worker>.workers.dev` |
@@ -117,7 +230,7 @@ node scripts/deploy.mjs
 
 与 [WNLUO/dsh-mobile-server](https://github.com/WNLUO/dsh-mobile-server)（基线 `v0.1.30`，commit `e729dd85`）在隧道线协议上保持兼容，架构层面按 Workers / DO 运行时做了调整。
 
-**协议一致**：`HEADER_LEN = 9`、全部 30 个二值帧指令一致，无 `0x1F+` 私有指令；CI 运行 `sync-reference.mjs --check --ci` 防漂移。
+**协议一致**：`HEADER_LEN = 9`、全部 30 个二值帧指令一致，无 `0x1F+` 私有指令；CI 运行 `npm run protocol:check` 校验锁文件与生成代码，防漂移。
 
 ### 已跟进的上游行为
 
@@ -164,7 +277,7 @@ npm run build:web                         # 首次启动前构建前端到 worke
 npm --prefix worker run dev               # wrangler dev，http://127.0.0.1:8787
 npm --prefix web run dev                  # 可选：Vite 热更新，http://127.0.0.1:5173
 npm run typecheck                         # 前后端 TypeScript 类型检查
-node scripts/sync-reference.mjs --check   # 协议基线与漂移校验
+npm run protocol:check                    # 协议锁文件与生成代码校验
 ```
 
 - **密钥**：本地变量写在 `worker/.dev.vars`（已被 `.gitignore`），`wrangler dev` 自动加载。
@@ -175,7 +288,7 @@ node scripts/sync-reference.mjs --check   # 协议基线与漂移校验
 
 **`workers.dev` 无法访问或初始化超时**
 
-在 Cloudflare Dashboard → Workers & Pages → 你的 Worker → Settings → Domains & Routes 绑定自定义域名，并在 `env.json` 填写 `PUBLIC_BASE_URL`。若首次部署的 Step 6 未连上 `workers.dev`，绑定域名后手动初始化一次：
+在 Cloudflare Dashboard → Workers & Pages → 你的 Worker → Settings → Domains & Routes 绑定自定义域名后，直接重新运行一次 `node scripts/deploy.mjs`（或 `--env <文件>`）即可自动识别并回填自定义域名、重新执行 Step 6 初始化；也可以手动执行一次初始化请求：
 
 ```bash
 curl -X POST https://<your-domain>/api/platform/v1/admin/bootstrap \

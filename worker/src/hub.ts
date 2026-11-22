@@ -550,15 +550,24 @@ export class Hub extends DurableObject<Env> {
   }
   async webSocketError(ws: WebSocket) { await this.webSocketClose(ws, 1011, 'error') }
 
-  private async reportToMaster(now: number) {
+  private async reportToMaster(now: number, allowFollowUp = true) {
     const master = this.env.PLATFORM_MASTER_URL?.trim()
     const claim = this.env.PLATFORM_CLAIM_CODE?.trim()
     if (!master || !claim) return
     this.lastSlaveReport = now
+    const prevMode = this.admin.mode
+    this.admin.flushMetrics()
     const sql = this.ctx.storage.sql
+    const regTunnels = this.tunnels().filter(t => t.att.reg)
+    const now24h = now - 24 * 3_600_000
     const licCount = Number(sql.exec('SELECT COUNT(*) c FROM licenses').toArray()[0]?.c ?? 0)
+    const activeLicCount = Number(sql.exec("SELECT COUNT(*) c FROM licenses WHERE status='active' AND (expires_at IS NULL OR expires_at>?)", now).toArray()[0]?.c ?? 0)
     const devCount = Number(sql.exec("SELECT COUNT(*) c FROM license_devices WHERE status='active'").toArray()[0]?.c ?? 0)
-    const online = this.tunnels().some(t => t.att.reg)
+    const instCount = Number(sql.exec('SELECT COUNT(*) c FROM instances').toArray()[0]?.c ?? 0)
+    const m24 = sql.exec('SELECT COALESCE(SUM(reqs),0) reqs, COALESCE(SUM(bytes_in),0) bin, COALESCE(SUM(bytes_out),0) bout, COALESCE(SUM(mirror_hits),0) mh FROM metrics_hourly WHERE hour >= ?', now24h).toArray()[0]
+    const blobRow = sql.exec('SELECT COUNT(*) c, COALESCE(SUM(size),0) b FROM blobs').toArray()[0]
+    const mirror = this.mirror.stats()
+    const reportIntervalSeconds = Math.max(30, Number(this.env.PLATFORM_REPORT_INTERVAL_SECONDS) || 300)
     const headers: Record<string, string> = {
       'content-type': 'application/json',
       'x-dsh-claim': normClaim(claim),
@@ -574,8 +583,26 @@ export class Hub extends DurableObject<Env> {
           publicUrl: this.env.PUBLIC_BASE_URL || '',
           admissionMode: this.admin.mode,
           licenseCount: licCount,
+          activeLicenseCount: activeLicCount,
           deviceCount: devCount,
-          tunnelOnline: online,
+          tunnelOnline: regTunnels.length > 0,
+          tunnelsOnline: regTunnels.length,
+          instances: instCount,
+          reqs24h: Number(m24?.reqs ?? 0),
+          bytesIn24h: Number(m24?.bin ?? 0),
+          bytesOut24h: Number(m24?.bout ?? 0),
+          mirrorHits24h: Number(m24?.mh ?? 0),
+          r2Enabled: Boolean(this.env.BLOB),
+          blobCount: Number(blobRow?.c ?? 0),
+          blobBytes: Number(blobRow?.b ?? 0),
+          mirrorEnabled: this.admin.mirrorEnabled,
+          mirrorInstances: mirror.instances,
+          mirrorBytes: mirror.bytes,
+          apnsEnabled: this.apns.enabled(),
+          doLocation: (this.env.DO_LOCATION ?? '').trim().toLowerCase(),
+          minVersion: this.admin.minVersion,
+          reportIntervalSeconds,
+          onlineHosts: regTunnels.slice(0, 5).map(t => ({ id: t.att.instance, version: t.att.version })),
         }),
       })
       if (!res.ok) {
@@ -583,14 +610,17 @@ export class Hub extends DurableObject<Env> {
         return
       }
       const data: any = await res.json().catch(() => ({}))
+      let modeChanged = false
       if (data?.admissionMode === 'open' || data?.admissionMode === 'restricted') {
         this.admin.setSetting('master_manages_mode', '1')
         this.admin.setSetting('admission_mode', data.admissionMode)
+        modeChanged = data.admissionMode !== prevMode
       } else if (data?.admissionMode === null || data?.managed === false) {
         this.admin.setSetting('master_manages_mode', '0')
       }
       this.admin.setSetting('master_last_report_at', String(now))
       this.admin.setSetting('master_last_error', '')
+      if (allowFollowUp && modeChanged) await this.reportToMaster(Date.now(), false)
     } catch (e: any) {
       this.admin.setSetting('master_last_error', e?.message ?? String(e))
     }

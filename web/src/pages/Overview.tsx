@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Activity, Bell, CheckCircle2, Compass, Database, Globe, HardDrive, KeyRound, Network, Package, Plug, RefreshCw, ShieldCheck, XCircle } from 'lucide-react'
 import { api, ago, bytes, shortId } from '../api'
-import { actionTone, Badge, Card, CopyBtn, EmptyState, Modal, ProgressBar, StatCard, useToast } from '../components/ui'
+import { actionTone, Badge, Card, CopyBtn, EmptyState, Modal, ProgressBar, Select, StatCard, useToast } from '../components/ui'
 
 interface DiagStep { name: string; ok: boolean; ms: number; detail: string }
 interface TelemetryHour { hour: number; label: string; reqs: number; bytesIn: number; bytesOut: number; mirrorHits: number }
@@ -309,10 +309,14 @@ export function Overview({ onNav }: { onNav: (tab: any) => void }) {
             <span>当前中转准入模式：<b>{o.mode === 'restricted' ? '限制模式（必须选择有效激活码）' : '开放模式（激活码可选）'}</b></span>
           </div>
           <label>选择要填入宿主的激活码（可选）
-            <select value={selLic} onChange={e => setSelLic(e.target.value)}>
-              <option value="">不使用激活码（仅开放模式）</option>
-              {licenses.map(l => <option key={l.id} value={l.code}>{l.code}{l.note ? ` · ${l.note}` : ''}</option>)}
-            </select>
+            <Select
+              value={selLic}
+              onChange={setSelLic}
+              options={[
+                { value: '', label: '不使用激活码（仅开放模式）' },
+                ...licenses.map(l => ({ value: l.code, label: `${l.code}${l.note ? ` · ${l.note}` : ''}` })),
+              ]}
+            />
           </label>
           <div>
             <div className="muted small" style={{ marginBottom: 6 }}>1. 桌面插件图形界面填入项</div>

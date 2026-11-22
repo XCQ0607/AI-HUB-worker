@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CalendarClock, Download, KeyRound, Laptop, Plus, RefreshCw, Search, ShieldAlert, Trash2, Unlink } from 'lucide-react'
 import { api, ago, fmtTime, shortId } from '../api'
-import { Badge, BatchBar, Card, ConfirmDialog, CopyBtn, Drawer, EmptyState, Modal, Pagination, SortTh, type SortState, useToast } from '../components/ui'
+import { Badge, BatchBar, Card, ConfirmDialog, CopyBtn, Drawer, EmptyState, Modal, Pagination, Select, SortTh, type SortState, useToast } from '../components/ui'
 
 function expiryBadge(exp?: number | null) {
   if (!exp) return <Badge tone="cyan">永久有效</Badge>
@@ -260,13 +260,17 @@ export function Licenses() {
               <label>单码可绑设备 (1–50)<input type="number" min={1} max={50} value={deviceLimit} onChange={e => setDeviceLimit(e.target.value)} /></label>
             </div>
             <label>有效期
-              <select value={expiresInDays} onChange={e => setExpiresInDays(+e.target.value)}>
-                <option value={0}>永久有效</option>
-                <option value={7}>7 天</option>
-                <option value={30}>30 天</option>
-                <option value={90}>90 天</option>
-                <option value={365}>365 天</option>
-              </select>
+              <Select
+                value={expiresInDays}
+                onChange={setExpiresInDays}
+                options={[
+                  { value: 0, label: '永久有效' },
+                  { value: 7, label: '7 天' },
+                  { value: 30, label: '30 天' },
+                  { value: 90, label: '90 天' },
+                  { value: 365, label: '365 天' },
+                ]}
+              />
             </label>
             {Number(count) === 1 && <label>自定义激活码（可选）<input placeholder="如 AIHUB-VIP-0001" value={customCode} onChange={e => setCustomCode(e.target.value)} /></label>}
             <label>备注（可选）<input placeholder="例如：家里的 Mac mini" value={note} onChange={e => setNote(e.target.value)} /></label>
@@ -287,13 +291,17 @@ export function Licenses() {
         <div className="form">
           <p className="muted small">激活码：<code>{renewTarget?.code}</code></p>
           <label>选择续期方案
-            <select value={renewDays} onChange={e => setRenewDays(+e.target.value)}>
-              <option value={7}>延长 7 天</option>
-              <option value={30}>延长 30 天</option>
-              <option value={90}>延长 90 天</option>
-              <option value={365}>延长 365 天</option>
-              <option value={0}>设为永久有效</option>
-            </select>
+            <Select
+              value={renewDays}
+              onChange={setRenewDays}
+              options={[
+                { value: 7, label: '延长 7 天' },
+                { value: 30, label: '延长 30 天' },
+                { value: 90, label: '延长 90 天' },
+                { value: 365, label: '延长 365 天' },
+                { value: 0, label: '设为永久有效' },
+              ]}
+            />
           </label>
         </div>
       </Modal>

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { BellRing, Check, Edit3, History, Plus, Send, Search, Trash2, Webhook } from 'lucide-react'
 import { api, ago, fmtTime, shortId } from '../api'
-import { Badge, BatchBar, Card, ConfirmDialog, Drawer, EmptyState, Modal, Pagination, SortTh, type BadgeTone, type SortState, useToast } from './ui'
+import { Badge, BatchBar, Card, ConfirmDialog, Drawer, EmptyState, Modal, Pagination, Select, SortTh, type BadgeTone, type SortState, useToast } from './ui'
 
 const PROVIDERS = [
   { id: 'bark', name: 'Bark (iOS)', tone: 'bad' as BadgeTone, urlPh: 'https://api.day.app/<your-key>（或自建 https://bark.example/push）', targetLbl: '分组名 (默认 AI-HUB)', usesTarget: true },
@@ -135,16 +135,21 @@ export function WebhooksPanel() {
 
   return (
     <div className="stack">
-      <Card title="告警规则" subtitle="同一实例或 IP 在冷却期内不重复推送">
+      <Card
+        title="告警规则"
+        subtitle="同一实例或 IP 在冷却期内不重复推送"
+        action={
+          <div className="btn-row" style={{ flexWrap: 'nowrap' }}>
+            <span className="muted small" style={{ whiteSpace: 'nowrap' }}>冷却(秒)</span>
+            <input type="number" min={10} max={3600} aria-label="告警冷却秒数" value={cooldownInput} onChange={e => setCooldownInput(e.target.value)} style={{ width: 82 }} />
+            <button className="btn-ghost btn-sm" style={{ whiteSpace: 'nowrap' }} onClick={() => saveAlerts({ ...alerts, cooldownSec: Number(cooldownInput) || 60 })}><Check size={13} />应用</button>
+          </div>
+        }
+      >
         <div className="chk-grid">
           <label className="chk-row"><input type="checkbox" checked={alerts.disconnect} onChange={e => saveAlerts({ ...alerts, disconnect: e.target.checked })} />宿主意外断线 / 心跳超时</label>
           <label className="chk-row"><input type="checkbox" checked={alerts.outdated} onChange={e => saveAlerts({ ...alerts, outdated: e.target.checked })} />旧版插件拦截告警</label>
           <label className="chk-row"><input type="checkbox" checked={alerts.bruteforce} onChange={e => saveAlerts({ ...alerts, bruteforce: e.target.checked })} />登录爆破限流告警</label>
-          <div className="btn-row">
-            <span className="muted small">冷却(秒)</span>
-            <input type="number" min={10} max={3600} aria-label="告警冷却秒数" value={cooldownInput} onChange={e => setCooldownInput(e.target.value)} style={{ width: 82 }} />
-            <button className="btn-ghost btn-sm" onClick={() => saveAlerts({ ...alerts, cooldownSec: Number(cooldownInput) || 60 })}><Check size={13} />应用</button>
-          </div>
         </div>
       </Card>
 
@@ -160,10 +165,12 @@ export function WebhooksPanel() {
             <Search size={14} className="muted" />
             <input placeholder="按名称 / URL 搜索…" value={q} onChange={e => { setQ(e.target.value); setPage(1) }} />
           </div>
-          <select style={{ width: 160 }} value={provFilter} onChange={e => { setProvFilter(e.target.value); setPage(1) }}>
-            <option value="all">全部渠道</option>
-            {PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
+          <Select
+            style={{ width: 160 }}
+            value={provFilter}
+            onChange={v => { setProvFilter(v); setPage(1) }}
+            options={[{ value: 'all', label: '全部渠道' }, ...PROVIDERS.map(p => ({ value: p.id, label: p.name }))]}
+          />
         </div>
 
         <BatchBar count={selectedIds.size} onClear={() => setSelectedIds(new Set())}>
@@ -227,9 +234,11 @@ export function WebhooksPanel() {
           <div className="form-2">
             <label>渠道名称<input placeholder="例如：我的 iPhone Bark" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></label>
             <label>平台类型
-              <select value={form.provider} onChange={e => setForm({ ...form, provider: e.target.value })}>
-                {PROVIDERS.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
+              <Select
+                value={form.provider}
+                onChange={v => setForm({ ...form, provider: v })}
+                options={PROVIDERS.map(p => ({ value: p.id, label: p.name }))}
+              />
             </label>
           </div>
           <label>HTTPS Webhook URL<input placeholder={meta.urlPh} value={form.url} onChange={e => setForm({ ...form, url: e.target.value })} /></label>

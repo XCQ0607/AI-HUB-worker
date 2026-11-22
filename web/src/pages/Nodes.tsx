@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Network, Plus, RefreshCw, Search, Server, Trash2 } from 'lucide-react'
-import { api, ago, fmtTime } from '../api'
-import { Badge, Card, ConfirmDialog, CopyBtn, EmptyState, Modal, useToast } from '../components/ui'
+import { ExternalLink, Network, Plus, RefreshCw, Search, Server, Trash2 } from 'lucide-react'
+import { api, ago, bytes, fmtTime, shortId } from '../api'
+import { Badge, Card, ConfirmDialog, CopyBtn, EmptyState, Modal, Select, useToast } from '../components/ui'
 
 export function Nodes() {
   const toast = useToast()
@@ -94,31 +94,72 @@ export function Nodes() {
                   <Search size={14} className="muted" />
                   <input placeholder="搜索节点名称 / 认领码 / 公网地址…" value={q} onChange={e => setQ(e.target.value)} />
                 </div>
-                <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as any)} style={{ width: 130 }}>
-                  <option value="all">全部状态</option>
-                  <option value="online">有宿主在线</option>
-                  <option value="offline">暂无宿主</option>
-                  <option value="revoked">已移除</option>
-                </select>
+                <Select
+                  value={statusFilter}
+                  onChange={v => setStatusFilter(v as any)}
+                  style={{ width: 130 }}
+                  options={[
+                    { value: 'all', label: '全部状态' },
+                    { value: 'online', label: '有宿主在线' },
+                    { value: 'offline', label: '暂无宿主' },
+                    { value: 'revoked', label: '已移除' },
+                  ]}
+                />
               </div>
               {filtered.length === 0 ? <EmptyState icon={<Network size={22} />} title="无匹配节点" /> : (
                 <div className="node-grid">
                   {filtered.map(n => {
               const desired = n.desiredMode === 'open' || n.desiredMode === 'restricted' ? n.desiredMode : null
               const pending = desired && desired !== n.admissionMode
+              const st = n.status ?? {}
+              const tunnelsOnline = typeof st.tunnelsOnline === 'number' ? st.tunnelsOnline : (n.tunnelOnline ? 1 : 0)
+              const intervalSec = typeof st.reportIntervalSeconds === 'number' && st.reportIntervalSeconds >= 30 ? st.reportIntervalSeconds : 300
+              const stale = !n.revokedAt && Boolean(n.lastSeenAt) && Date.now() - n.lastSeenAt > Math.max(600, intervalSec * 2.5) * 1000
+              const hasRich = typeof st.reqs24h === 'number' || typeof st.instances === 'number'
+              const safeUrl = /^https?:\/\//i.test(n.publicUrl || '') ? n.publicUrl.replace(/\/+$/, '') : ''
+              const onlineHosts = Array.isArray(st.onlineHosts) ? st.onlineHosts : []
               return (
                 <div className="node-card" key={n.id}>
                   <div className="node-hd">
                     <div className="node-title">
                       <Server size={16} className="muted" />
                       <b>{n.name || '未报到节点'}</b>
+                      {st.doLocation && <Badge tone="accent">{String(st.doLocation).toUpperCase()}</Badge>}
                       {n.revokedAt && <Badge tone="bad">已移除</Badge>}
                     </div>
-                    {n.tunnelOnline ? <Badge tone="ok" dot>有宿主在线</Badge> : <Badge>暂无宿主</Badge>}
+                    {stale ? <Badge tone="warn">上报超时</Badge>
+                      : tunnelsOnline > 0 ? <Badge tone="ok" dot>{tunnelsOnline} 台在线</Badge>
+                        : <Badge>暂无宿主</Badge>}
                   </div>
 
                   <div className="mono-cell"><code>{n.claimCode}</code><CopyBtn value={n.claimCode} label="认领码" /></div>
-                  <div className="muted small">地址：{n.publicUrl || '—'} · 码 {n.licenseCount} · 设备 {n.deviceCount} · 上报 {ago(n.lastSeenAt)}</div>
+                  <div className="muted small" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    {safeUrl ? (
+                      <a href={`${safeUrl}/platform/`} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'inherit', textDecoration: 'underline', wordBreak: 'break-all' }}>
+                        {safeUrl}<ExternalLink size={13} />
+                      </a>
+                    ) : <span>地址：—</span>}
+                    <span>上报 {ago(n.lastSeenAt)}</span>
+                  </div>
+
+                  <div className="node-metrics">
+                    <div className="node-metric"><span>在线 / 实例</span><b>{tunnelsOnline} / {hasRich ? (st.instances ?? 0) : '—'}</b></div>
+                    <div className="node-metric"><span>24h 请求</span><b>{typeof st.reqs24h === 'number' ? st.reqs24h.toLocaleString() : '—'}</b></div>
+                    <div className="node-metric"><span>24h 流量</span><b>{typeof st.bytesIn24h === 'number' ? bytes((st.bytesIn24h || 0) + (st.bytesOut24h || 0)) : '—'}</b></div>
+                    <div className="node-metric"><span>激活码 / 设备</span><b>{typeof st.activeLicenseCount === 'number' ? st.activeLicenseCount : n.licenseCount} / {n.deviceCount}</b></div>
+                    <div className="node-metric"><span>R2 存储</span><b>{st.r2Enabled === true ? `${bytes(st.blobBytes || 0)} (${st.blobCount || 0})` : st.r2Enabled === false ? '未启用' : '—'}</b></div>
+                    <div className="node-metric"><span>离线镜像</span><b>{st.mirrorEnabled === true ? `${bytes(st.mirrorBytes || 0)} (${st.mirrorInstances || 0})` : st.mirrorEnabled === false ? '已关闭' : '—'}</b></div>
+                  </div>
+
+                  {onlineHosts.length > 0 && (
+                    <div className="node-hosts">
+                      {onlineHosts.map((h: any, idx: number) => (
+                        <Badge key={`${h.id || idx}`} tone="neutral">
+                          {shortId(String(h.id || 'host'), 16)}{h.version ? ` v${h.version}` : ''}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
 
                   {!n.revokedAt ? (
                     <div className="node-ft">
