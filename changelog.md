@@ -2,6 +2,15 @@
 
 All notable changes to **AI-HUB-worker** (`XCQ0607/AI-HUB-worker`) will be documented in this file.
 
+## v1.0.1 (2026-11-28)
+
+### 上游协议同步与架构精简
+
+- **同步上游 `WNLUO/dsh-mobile-server` 至 `aa8e96a9`（relay `v0.1.32`）**：更新 `protocol/upstream.lock.json` 与 `worker/src/protocol.generated.ts`，从 `OWNED_PATHS` 移除 `/api/mobile/v1/push-token`，从协议帧表 `T` 移除 `pushRegister (0x1A)` 与 `pushSend (0x1B)`。
+- **移除中转侧 APNs 离线推送**：离线推送改由总控（`dsh-directory`）负责。删除 `worker/src/apns.ts`、`/api/mobile/v1/push-token` 路由、`T.pushRegister` / `T.pushSend` 帧处理、管理端 `/push/tokens` 与 `/push/test` 接口、部署脚本与 `env-template.json` 中的 `APNS_*` 配置项，以及控制台的 APNs 状态卡片、令牌管理面板与相关审计筛选。
+- **移除中转侧实例迁移台账（`0x1C`）**：对齐上游 `32552241`（`v0.1.31`），设备地址发现改由总控负责。移除 `T.migrate` 帧处理（协议常量 `0x1C` 保留以兼容宿主，中转按未知帧静默忽略）、离线 `x-dsh-migrated-to` 503 重定向分支、管理端 `/migrations` 接口，以及控制台「迁移台账 0x1C」标签页、实例迁移状态徽标与登记弹窗。
+- **文档更新**：更新 `README.md` 架构说明与环境变量表，移除 APNs 与迁移台账相关描述。
+
 ## v1.0.0 (2026-11-22)
 
 ### 协议对齐与隧道核心

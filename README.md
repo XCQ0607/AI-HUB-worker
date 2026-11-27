@@ -23,8 +23,8 @@
                                             ├─►  Worker ─► Hub (Durable Object, SQLite + Hibernation WS)
 宿主插件 ── 出站 WSS /tunnel (二进制帧 v2) ──┘       ├─ 帧级透传 HTTP / SSE / WebSocket（SSE 每设备上限 3）
 浏览器 ── /platform (React 管理控制台 + 2FA) ──►     ├─ 激活码准入(含到期/续期/多设备) / 注册密钥 / 最低版本
-监控探针 ── /status (Bearer / ?token= 只读令牌) ─►   ├─ 离线镜像(0x17) / 迁移台账(0x1C) / R2 Blob(0x1D-0x1E)
-                                                     └─ APNs 离线推送 + 7 渠道 SSRF 防护 Webhook 告警
+监控探针 ── /status (Bearer / ?token= 只读令牌) ─►   ├─ 离线镜像(0x17) / R2 Blob(0x1D-0x1E)
+                                                     └─ 7 渠道 SSRF 防护 Webhook 告警
 ```
 
 ## 控制台预览
@@ -65,8 +65,6 @@
 | --- | --- |
 | 离线镜像（`0x17`） | DO SQLite 热缓存 + 变更落盘；宿主断线时返回带 `stale` 标记的清单 |
 | 历史密文（`0x1D` / `0x1E`） | R2 存储宿主端到端加密后的密文，7 天 TTL 淘汰，中转不持有密钥 |
-| 迁移台账（`0x1C`） | 手机收到 `503 migrated` 与 `x-dsh-migrated-to` 后自动切换中转，支持控制台手动登记 |
-| APNs 推送 | ES256 令牌鉴权直连 Apple APNs，用于锁屏提醒 |
 | Webhook 告警 | Bark / Telegram / 飞书 / 钉钉 / 企业微信 / Discord / 自定义 HMAC；断线、旧版本、登录爆破三类事件，带冷却与 SSRF 防护 |
 
 ### 控制台
@@ -180,7 +178,7 @@ node scripts/deploy-cluster.mjs slave        # 仅部署指定节点
 2. **账号解析**：若未配置 `CLOUDFLARE_ACCOUNT_ID`，调用 Cloudflare API 自动识别唯一账号。
 3. **域名探测、R2 与配置生成**：优先探测当前 Worker 已绑定的自定义域，尝试创建/复用 R2 桶（账号未开通 R2 时自动跳过），生成 `worker/wrangler.generated.json`。
 4. **发布 Worker**：执行 `wrangler deploy`；若首次部署自动探测到的 `PUBLIC_BASE_URL` 尚未写入运行时变量，会自动再同步发布一次。
-5. **写入密钥与配置回填**：批量写入 Worker Secrets（如 `ADMIN_TOKEN`、`TUNNEL_REGISTER_SECRET`、`APNS_*` 等），并将 `CLOUDFLARE_ACCOUNT_ID`、`PUBLIC_BASE_URL`、`R2_BUCKET`、`ADMIN_TOKEN` 回填到当前使用的 `env*.json`。
+5. **写入密钥与配置回填**：批量写入 Worker Secrets（如 `ADMIN_TOKEN`、`TUNNEL_REGISTER_SECRET`、`PLATFORM_OTA_CONTROL_TOKEN` 等），并将 `CLOUDFLARE_ACCOUNT_ID`、`PUBLIC_BASE_URL`、`R2_BUCKET`、`ADMIN_TOKEN` 回填到当前使用的 `env*.json`。
 6. **初始化管理员**：等待 6 秒后调用 `POST <url>/api/platform/v1/admin/bootstrap` 创建/更新管理员账号，并把本次摘要写入 `deploy-output.json`（已被 `.gitignore` 忽略）。
 
 **常用运行参数**：
@@ -261,12 +259,11 @@ Worker 入口代码在全球边缘节点自动就近执行；真正有区域归�
 | `ADMISSION_MODE` | `open`（默认）/ `restricted`，部署后也可在控制台实时切换 |
 | `MIN_PLUGIN_VERSION` | 如 `0.5.80`；低于此版本的插件注册时返回 `plugin_too_old` |
 
-**离线镜像 / APNs / OTA / 节点联邦**：
+**离线镜像 / OTA / 节点联邦**：
 
 | 变量 | 说明 |
 | --- | --- |
 | `MIRROR_CACHE` / `MIRROR_FALLBACK_MS` | 离线镜像开关（默认 `1`）与慢隧道回退延迟（毫秒，默认 `0` 表示仅断线时兜底） |
-| `APNS_KEY` / `APNS_KEY_ID` / `APNS_TEAM_ID` / `APNS_TOPIC` | Apple APNs 令牌鉴权：`.p8` 私钥内容、Key ID、Team ID、App Bundle ID（均为 Secret） |
 | `PLATFORM_OTA_CONTROL_TOKEN` | 供外部 CI / 脚本调用 `/api/desktop-plugins/ota/*` 的独立令牌（Secret） |
 | `PLATFORM_MASTER_URL` | 主控端对外地址（如 `https://master.example.com`，不带 `/platform/`）；填写后本节点即运行于被控模式 |
 | `PLATFORM_CLAIM_CODE` | 主控端生成的节点认领码（`NODE-XXXX-XXXX`），须与 `PLATFORM_MASTER_URL` 同时配置才会启动上报 |

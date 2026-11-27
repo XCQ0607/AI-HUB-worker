@@ -1,6 +1,6 @@
 {
   "name": "ai-hub-worker",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Cloudflare Workers + Durable Objects port of WNLUO/dsh-mobile-server (DSH tunnel relay) with a React admin console.",
   "license": "MIT",
   "private": true,

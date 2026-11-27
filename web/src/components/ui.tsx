@@ -189,8 +189,6 @@ const ACTION_LABELS: Record<string, string> = {
   'node.revoke': '移除节点',
   'mirror.clear': '清理离线镜像',
   'blob.clear': '清理 R2 密文',
-  'push.delete': '删除推送设备',
-  'push.test': '测试 APNs 推送',
   'ota.publish': '发布 OTA 版本',
   'ota.delete': '删除 OTA 版本',
   'webhook.create': '创建 Webhook 渠道',
@@ -202,8 +200,6 @@ const ACTION_LABELS: Record<string, string> = {
   'webhook.batch.enable': '批量启用 Webhook',
   'webhook.batch.disable': '批量停用 Webhook',
   'webhook.batch.delete': '批量删除 Webhook',
-  'migration.set': '设置迁移台账',
-  'migration.delete': '删除迁移台账',
   'monitor.token.create': '创建监控令牌',
   'monitor.token.delete': '删除监控令牌',
   'settings.mode': '修改准入模式',
@@ -222,8 +218,8 @@ export function actionTone(action: string): BadgeTone {
   if (action.includes('delete') || action.includes('kick') || action.includes('revoke') || action.includes('clear') || action.includes('forget')) return 'bad'
   if (action.includes('create') || action.includes('publish') || action.includes('enable')) return 'ok'
   if (action.startsWith('settings.') || action.includes('mode') || action.includes('toggle')) return 'warn'
-  if (action.startsWith('webhook.') || action.startsWith('push.')) return 'cyan'
-  if (action.startsWith('node.') || action.startsWith('migration.')) return 'info'
+  if (action.startsWith('webhook.')) return 'cyan'
+  if (action.startsWith('node.')) return 'info'
   return 'accent'
 }
 

@@ -1,7 +1,6 @@
 import { ctEq, sha256Hex } from './protocol'
 import { buildOtpAuthUri, genRecoveryCodes, genTotpSecret, renderQrSvg, verifyTotpStep } from './totp'
 import type { MirrorStore } from './mirror'
-import type { ApnsService } from './apns'
 import type { OtaStore } from './ota'
 import type { WebhookService } from './webhook'
 
@@ -20,10 +19,6 @@ export interface AdminEnv {
   PLATFORM_OTA_CONTROL_TOKEN?: string
   PLATFORM_REPORT_INTERVAL_SECONDS?: string
   PUBLIC_BASE_URL?: string
-  APNS_KEY?: string
-  APNS_KEY_ID?: string
-  APNS_TEAM_ID?: string
-  APNS_TOPIC?: string
   BLOB?: R2Bucket
 }
 
@@ -32,7 +27,6 @@ export interface Live {
   tunnels(): TunnelInfo[]
   kick(id: string): boolean
   mirror: MirrorStore
-  apns: ApnsService
   ota: OtaStore
   webhook: WebhookService
   waitUntil(p: Promise<unknown>): void
@@ -211,7 +205,7 @@ export class Admin {
     return this.sql.exec('SELECT * FROM license_devices WHERE id=?', id).toArray()[0]
   }
 
-  // ---- instances / migrate ----
+  // ---- instances ----
   touchInstance(id: string, version: string, ip: string, license: string) {
     const now = Date.now()
     this.sql.exec(`INSERT INTO instances(id,version,ip,first_seen,last_seen,license) VALUES(?,?,?,?,?,?)
@@ -219,16 +213,6 @@ export class Admin {
       id, version, ip, now, now, license)
   }
   markSeen(id: string) { this.sql.exec('UPDATE instances SET last_seen=? WHERE id=?', Date.now(), id) }
-  migration(id: string): string | null {
-    const r = this.sql.exec('SELECT dest,expires FROM migrations WHERE id=?', id).toArray()[0]
-    if (!r) return null
-    if (Number(r.expires) < Date.now()) { this.sql.exec('DELETE FROM migrations WHERE id=?', id); return null }
-    return String(r.dest)
-  }
-  setMigration(id: string, dest: string, ttlDays = 30) {
-    if (!dest) this.sql.exec('DELETE FROM migrations WHERE id=?', id)
-    else this.sql.exec('INSERT INTO migrations(id,dest,expires) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET dest=excluded.dest, expires=excluded.expires', id, dest, Date.now() + ttlDays * 86400_000)
-  }
 
   private getDiagSecret(): string {
     let s = this.setting('diag_secret')
@@ -503,11 +487,9 @@ export class Admin {
         devicesBound: n("SELECT COUNT(*) c FROM license_devices WHERE status='active'"),
         mirror: { enabled: this.mirrorEnabled, fallbackMs: this.mirrorFallbackMs, ...mirror },
         blob: { enabled: !!this.env.BLOB, count: n('SELECT COUNT(*) c FROM blobs'), bytes: n('SELECT COALESCE(SUM(size),0) c FROM blobs') },
-        apns: { enabled: live.apns.enabled(), tokens: live.apns.countTokens() },
         ota: { enabled: !!this.env.BLOB, count: live.ota.count() },
         nodes: { total: n('SELECT COUNT(*) c FROM nodes WHERE revoked_at IS NULL'), online: n('SELECT COUNT(*) c FROM nodes WHERE revoked_at IS NULL AND tunnel_online=1') },
         minVersion: this.minVersion,
-        migrations: n('SELECT COUNT(*) c FROM migrations WHERE expires>?', now),
         unregisteredTimeouts: live.unregisteredTimeouts(),
       })
     }
@@ -524,7 +506,6 @@ export class Admin {
             firstSeen: Number(r.first_seen), lastSeen: Number(r.last_seen),
             license: r.license ? String(r.license).slice(0, 12) + '…' : '',
             online: !!l, connectedAt: l?.connectedAt ?? null, pending: l?.pending ?? 0,
-            migratedTo: this.migration(id),
           }
         }),
       })
@@ -774,30 +755,6 @@ export class Admin {
       await live.clearBlobs(id); this.audit(me, 'blob.clear', id); return json(200, { ok: true })
     }
 
-    if (route === '/push/tokens' && method === 'GET') {
-      return json(200, { enabled: live.apns.enabled(), items: live.apns.listTokens() })
-    }
-    m = /^\/push\/tokens\/([^/]+)\/([^/]+)$/.exec(route)
-    if (m && method === 'DELETE') {
-      const inst = safeDec(m[1]), dev = safeDec(m[2])
-      if (!inst || !dev) return json(400, { error: '参数无效' })
-      live.apns.deleteDevice(inst, dev); this.audit(me, 'push.delete', `${inst}/${dev}`); return json(200, { ok: true })
-    }
-    if (route === '/push/test' && method === 'POST') {
-      const b = await body()
-      const inst = String(b.instance ?? '').trim()
-      if (!inst) return json(400, { error: '请选择实例 ID' })
-      if (!live.apns.enabled()) return json(400, { error: '未配置 APNs 密钥（APNS_KEY / APNS_KEY_ID / APNS_TEAM_ID）' })
-      const res = await live.apns.sendCompletion(inst, {
-        deviceId: String(b.deviceId ?? ''),
-        title: String(b.title || 'AI-HUB 推送测试'),
-        body: String(b.body || '这是一条来自中转控制台的测试推送'),
-        kind: 'completed',
-      })
-      this.audit(me, 'push.test', inst, `sent=${res.sent} failed=${res.failed}`)
-      return json(200, { ok: true, ...res })
-    }
-
     if (route === '/ota' && method === 'GET') {
       return json(200, { enabled: !!this.env.BLOB, items: live.ota.listReleases() })
     }
@@ -876,7 +833,7 @@ export class Admin {
       }
     }
 
-    // ---- diagnostics & manual 0x1C migrations ----
+    // ---- diagnostics ----
     if (route === '/diagnostics' && method === 'GET') {
       return json(200, {
         colo: req.headers.get('x-aihub-colo') || 'LOCAL',
@@ -886,28 +843,6 @@ export class Admin {
         wssProbeTicket: await this.makeDiagTicket(),
         serverTime: Date.now(),
       })
-    }
-    if (route === '/migrations' && method === 'GET') {
-      const rows = this.sql.exec('SELECT id,dest,expires FROM migrations WHERE expires > ? ORDER BY expires DESC LIMIT 500', Date.now()).toArray()
-      return json(200, { items: rows.map(r => ({ instanceId: String(r.id), to: String(r.dest), expiresAt: Number(r.expires) })) })
-    }
-    if (route === '/migrations' && method === 'POST') {
-      const b = await body()
-      const id = String(b.instanceId ?? '').trim().slice(0, 200)
-      const to = String(b.to ?? '').trim().slice(0, 512)
-      const ttlDays = Math.min(Math.max(Number(b.ttlDays) || 30, 1), 365)
-      if (!id || !/^https?:\/\//i.test(to)) return json(400, { error: '请填写有效的实例 ID 与 http(s):// 目标地址' })
-      this.setMigration(id, to, ttlDays)
-      this.audit(me, 'migration.set', id, to)
-      return json(200, { ok: true })
-    }
-    m = /^\/migrations\/([^/]+)$/.exec(route)
-    if (m && method === 'DELETE') {
-      const id = safeDec(m[1])
-      if (!id) return json(400, { error: '参数无效' })
-      this.setMigration(id, '')
-      this.audit(me, 'migration.delete', id)
-      return json(200, { ok: true })
     }
 
     // ---- telemetry, monitor tokens & TOTP 2FA ----
@@ -1081,7 +1016,6 @@ export class Admin {
         mirrorFallbackMs: this.mirrorFallbackMs,
         heartbeatMs: this.heartbeatMs,
         registerSecretSet: !!this.env.TUNNEL_REGISTER_SECRET,
-        apnsEnabled: live.apns.enabled(),
         r2Enabled: !!this.env.BLOB,
         otaTokenSet: !!this.env.PLATFORM_OTA_CONTROL_TOKEN,
         role: this.isSlave ? 'slave' : 'master',

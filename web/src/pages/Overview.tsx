@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Activity, Bell, CheckCircle2, Compass, Database, Globe, HardDrive, KeyRound, Network, Package, Plug, RefreshCw, ShieldCheck, XCircle } from 'lucide-react'
+import { Activity, CheckCircle2, Compass, Database, Globe, HardDrive, KeyRound, Network, Package, Plug, RefreshCw, ShieldCheck, XCircle } from 'lucide-react'
 import { api, ago, bytes, shortId } from '../api'
 import { actionTone, Badge, Card, CopyBtn, EmptyState, Modal, ProgressBar, Select, StatCard, useToast } from '../components/ui'
 
@@ -159,13 +159,10 @@ export function Overview({ onNav }: { onNav: (tab: any) => void }) {
         <StatCard label="历史 Blob (R2)" value={o.blob?.enabled ? `${o.blob.count} 条` : '未绑定'} onClick={() => onNav('storage')}
           hint={o.blob?.enabled ? bytes(o.blob.bytes) : '部署时 ENABLE_R2=1 启用'}
           icon={<Database size={16} className="muted" />} />
-        <StatCard label="APNs 离线推送" value={o.apns?.enabled ? `${o.apns.tokens} 台` : '未配置'} onClick={() => onNav('storage')}
-          hint={o.apns?.enabled ? '推送密钥已配置' : '可改用 Webhook 桥接'}
-          icon={<Bell size={16} className="muted" />} />
         <StatCard label="节点联邦" value={o.role === 'slave' ? '被控端' : `${o.nodes?.online ?? 0} / ${o.nodes?.total ?? 0}`} onClick={() => onNav('nodes')}
           hint={o.role === 'slave' ? (o.masterLastError ? '上报异常' : o.masterLastReportAt ? '已挂载主控端' : '待首次上报（需配置认领码）') : '在线 / 全部被控节点'}
           icon={<Network size={16} className="muted" />} />
-        <StatCard label="插件 OTA / 迁移" value={`${o.ota?.count ?? 0} / ${o.migrations ?? 0}`} onClick={() => onNav('ota')}
+        <StatCard label="插件 OTA" value={o.ota?.count ?? 0} onClick={() => onNav('ota')}
           hint={`最低版本门槛: ${o.minVersion || '不限'}`}
           icon={<Package size={16} className="muted" />} />
       </div>

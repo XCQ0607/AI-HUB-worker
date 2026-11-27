@@ -246,7 +246,7 @@ export async function main() {
   const secrets = {}
   let adminToken = env.ADMIN_TOKEN
   if (adminToken || !existing.has('ADMIN_TOKEN')) { adminToken ||= randomBytes(24).toString('base64url'); secrets.ADMIN_TOKEN = adminToken }
-  for (const k of ['TUNNEL_REGISTER_SECRET', 'APNS_KEY', 'APNS_KEY_ID', 'APNS_TEAM_ID', 'APNS_TOPIC', 'PLATFORM_OTA_CONTROL_TOKEN', 'PLATFORM_MASTER_TOKEN']) {
+  for (const k of ['TUNNEL_REGISTER_SECRET', 'PLATFORM_OTA_CONTROL_TOKEN', 'PLATFORM_MASTER_TOKEN']) {
     if (env[k]) secrets[k] = env[k]
   }
   if (Object.keys(secrets).length) {

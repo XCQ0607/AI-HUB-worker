@@ -1,33 +1,26 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ArrowRightLeft, Plug, Plus, Power, RefreshCw, Search, Trash2 } from 'lucide-react'
+import { Plug, Power, RefreshCw, Search, Trash2 } from 'lucide-react'
 import { api, ago, fmtTime, shortId } from '../api'
-import { Badge, BatchBar, Card, ConfirmDialog, CopyBtn, Drawer, EmptyState, Modal, Pagination, SortTh, type SortState, useToast } from '../components/ui'
+import { Badge, BatchBar, Card, ConfirmDialog, CopyBtn, Drawer, EmptyState, Pagination, SortTh, type SortState, useToast } from '../components/ui'
 
 export function Tunnels() {
   const toast = useToast()
-  const [sub, setSub] = useState<'tunnels' | 'migrations'>('tunnels')
   const [items, setItems] = useState<any[]>([])
-  const [migrations, setMigrations] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [q, setQ] = useState('')
-  const [migQ, setMigQ] = useState('')
-  const [migPage, setMigPage] = useState(1)
   const [filter, setFilter] = useState<'all' | 'online' | 'offline'>('all')
   const [sort, setSort] = useState<SortState>({ field: 'lastSeen', dir: 'desc' })
   const [page, setPage] = useState(1)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
   const [detail, setDetail] = useState<any | null>(null)
-  const [confirmAct, setConfirmAct] = useState<{ kind: 'kick' | 'delete' | 'batchDel' | 'delMig'; item?: any } | null>(null)
-  const [migModal, setMigModal] = useState(false)
-  const [migForm, setMigForm] = useState({ instanceId: '', to: '', ttlDays: '30' })
+  const [confirmAct, setConfirmAct] = useState<{ kind: 'kick' | 'delete' | 'batchDel'; item?: any } | null>(null)
   const [busy, setBusy] = useState(false)
 
   const load = useCallback(async () => {
     try {
-      const [t, m] = await Promise.all([api<{ items: any[] }>('/tunnels'), api<{ items: any[] }>('/migrations')])
+      const t = await api<{ items: any[] }>('/tunnels')
       setItems(t.items)
-      setMigrations(m.items)
       setDetail((prev: any) => prev ? (t.items.find((x: any) => x.id === prev.id) ?? prev) : null)
     } catch (e: any) { toast(e.message, 'error') } finally { setLoading(false) }
   }, [toast])
@@ -84,9 +77,6 @@ export function Tunnels() {
         })
         if (failed.length === 0) toast(`批量操作完成（共 ${succeeded.size} 项）`, 'success')
         else toast(`成功 ${succeeded.size} 项，失败 ${failed.length} 项（${failed[0]}）`, 'error')
-      } else if (confirmAct.kind === 'delMig') {
-        await api(`/migrations/${encodeURIComponent(confirmAct.item.instanceId)}`, { method: 'DELETE' })
-        toast('已撤销迁移记录', 'success')
       }
       setConfirmAct(null)
       if (detail?.id === confirmAct.item?.id) setDetail(null)
@@ -94,34 +84,10 @@ export function Tunnels() {
     } catch (e: any) { toast(e.message, 'error') } finally { setBusy(false) }
   }
 
-  const saveMigration = async () => {
-    if (!migForm.instanceId.trim() || !/^https?:\/\//i.test(migForm.to.trim())) {
-      return toast('请填写有效的实例 ID 与 http(s):// 目标地址', 'error')
-    }
-    const ttlDays = Number(migForm.ttlDays)
-    if (!Number.isInteger(ttlDays) || ttlDays < 1 || ttlDays > 365) {
-      return toast('保留天数需为 1–365 的整数', 'error')
-    }
-    setBusy(true)
-    try {
-      await api('/migrations', { body: { instanceId: migForm.instanceId.trim(), to: migForm.to.trim(), ttlDays } })
-      toast('已登记 0x1C 迁移重定向', 'success')
-      setMigModal(false); load()
-    } catch (e: any) { toast(e.message, 'error') } finally { setBusy(false) }
-  }
-
   return (
     <div className="stack">
-      <div className="toolbar">
-        <div className="seg">
-          <button className={sub === 'tunnels' ? 'active' : ''} onClick={() => setSub('tunnels')}>宿主实例 ({items.length})</button>
-          <button className={sub === 'migrations' ? 'active' : ''} onClick={() => setSub('migrations')}>迁移台账 0x1C ({migrations.length})</button>
-        </div>
-        <button className="icon-btn" onClick={load} title="刷新" aria-label="刷新隧道列表"><RefreshCw size={14} /></button>
-      </div>
-
-      {sub === 'tunnels' && (
-        <Card title="宿主实例" subtitle="每台电脑以唯一 instanceId 注册出站 WSS 隧道，同实例重连自动顶替旧连接">
+      <Card title="宿主实例" subtitle="每台电脑以唯一 instanceId 注册出站 WSS 隧道，同实例重连自动顶替旧连接"
+        action={<button className="icon-btn" onClick={load} title="刷新" aria-label="刷新隧道列表"><RefreshCw size={14} /></button>}>
           <div className="toolbar">
             <div className="search-box">
               <Search size={14} className="muted" />
@@ -176,7 +142,6 @@ export function Tunnels() {
                   </span>
                   <span data-label="状态">
                     {t.online ? <Badge tone="ok" dot>在线 · {t.pending} 在途</Badge>
-                      : t.migratedTo ? <Badge tone="warn">已迁移</Badge>
                       : <Badge tone="neutral">离线</Badge>}
                   </span>
                   <span data-label="插件版本">{t.version ? <Badge tone="accent">{t.version}</Badge> : '—'}</span>
@@ -192,45 +157,7 @@ export function Tunnels() {
             </div>
           )}
           <Pagination total={filtered.length} page={safePage} pageSize={pageSize} onChange={setPage} />
-        </Card>
-      )}
-
-      {sub === 'migrations' && (() => {
-        const filteredMigs = migrations.filter(m => !migQ.trim() || `${m.instanceId} ${m.to}`.toLowerCase().includes(migQ.trim().toLowerCase()))
-        const safeMigPage = Math.min(migPage, Math.max(1, Math.ceil(filteredMigs.length / pageSize)))
-        const pagedMigs = filteredMigs.slice((safeMigPage - 1) * pageSize, safeMigPage * pageSize)
-        return (
-          <Card title="实例迁移台账 (0x1C)" subtitle="实例离线时优先于镜像返回 503 migrated + x-dsh-migrated-to，引导手机自动切换新中转"
-            action={<button className="btn-primary btn-sm" onClick={() => { setMigForm({ instanceId: '', to: '', ttlDays: '30' }); setMigModal(true) }}><Plus size={14} />手动登记</button>}>
-            {migrations.length > 0 && (
-              <div className="toolbar">
-                <div className="search-box">
-                  <Search size={14} className="muted" />
-                  <input placeholder="按实例 ID / 目标中转地址搜索…" value={migQ} onChange={e => { setMigQ(e.target.value); setMigPage(1) }} />
-                </div>
-              </div>
-            )}
-            {loading ? <p className="muted pad">读取迁移台账…</p> : pagedMigs.length === 0 ? (
-              <EmptyState icon={<ArrowRightLeft size={24} />} title={migrations.length === 0 ? '暂无迁移记录' : '无匹配的迁移记录'} hint={migrations.length === 0 ? '宿主发送 0x1C 帧或管理员手动登记后在此显示' : '请调整搜索关键词'} />
-            ) : (
-              <>
-                <div className="table">
-                  <div className="tr t-mig th"><span>实例 ID</span><span>目标中转地址</span><span>过期时间</span><span /></div>
-                  {pagedMigs.map(m => (
-                    <div className="tr t-mig" key={m.instanceId}>
-                      <span className="mono-cell" data-label="实例 ID"><code>{shortId(m.instanceId, 26)}</code><CopyBtn value={m.instanceId} label="实例 ID" /></span>
-                      <span className="mono-cell" data-label="目标地址"><code>{m.to}</code><CopyBtn value={m.to} label="目标地址" /></span>
-                      <span className="muted" data-label="过期时间">{fmtTime(m.expiresAt)}</span>
-                      <span className="actions"><button className="icon-btn danger" title="撤销" aria-label={`撤销实例 ${m.instanceId} 的迁移记录`} onClick={() => setConfirmAct({ kind: 'delMig', item: m })}><Trash2 size={14} /></button></span>
-                    </div>
-                  ))}
-                </div>
-                <Pagination total={filteredMigs.length} page={safeMigPage} pageSize={pageSize} onChange={setMigPage} />
-              </>
-            )}
-          </Card>
-        )
-      })()}
+      </Card>
 
       <Drawer open={!!detail} title="实例详情" subtitle={detail?.id} onClose={() => setDetail(null)}>
         {detail && (
@@ -244,34 +171,14 @@ export function Tunnels() {
               <div className="kv-row"><span className="muted">使用激活码</span><code>{detail.license || '无（开放模式）'}</code></div>
               <div className="kv-row"><span className="muted">首次连入</span><span>{fmtTime(detail.firstSeen)}</span></div>
               <div className="kv-row"><span className="muted">最近活跃</span><span>{fmtTime(detail.lastSeen)}</span></div>
-              {detail.migratedTo && <div className="kv-row"><span className="muted">迁移目标 (0x1C)</span><code>{detail.migratedTo}</code></div>}
-            </div>
-            <div>
-              <button className="btn-ghost" onClick={() => { setMigForm({ instanceId: detail.id, to: detail.migratedTo || '', ttlDays: '30' }); setMigModal(true) }}>
-                <ArrowRightLeft size={14} />登记 / 修改迁移地址
-              </button>
             </div>
           </div>
         )}
       </Drawer>
 
-      <Modal open={migModal} title="登记 0x1C 迁移重定向" onClose={() => setMigModal(false)} footer={
-        <>
-          <button className="btn-ghost" onClick={() => setMigModal(false)}>取消</button>
-          <button className="btn-primary" disabled={busy} onClick={saveMigration}>{busy ? '保存中…' : '保存迁移'}</button>
-        </>
-      }>
-        <div className="form">
-          <label>实例 ID<input value={migForm.instanceId} onChange={e => setMigForm({ ...migForm, instanceId: e.target.value })} placeholder="输入目标 instanceId" /></label>
-          <label>新中转地址 (HTTPS)<input value={migForm.to} onChange={e => setMigForm({ ...migForm, to: e.target.value })} placeholder="https://new-relay.example.com" /></label>
-          <label>保留天数 (1–365)<input type="number" min={1} max={365} value={migForm.ttlDays} onChange={e => setMigForm({ ...migForm, ttlDays: e.target.value })} /></label>
-        </div>
-      </Modal>
-
       <ConfirmDialog open={!!confirmAct} danger busy={busy}
-        title={confirmAct?.kind === 'kick' ? '断开宿主隧道' : confirmAct?.kind === 'delMig' ? '撤销迁移记录' : confirmAct?.kind === 'batchDel' ? '批量断开 / 清理' : '删除实例记录'}
+        title={confirmAct?.kind === 'kick' ? '断开宿主隧道' : confirmAct?.kind === 'batchDel' ? '批量断开 / 清理' : '删除实例记录'}
         description={confirmAct?.kind === 'kick' ? `确定强制断开实例 ${shortId(confirmAct.item.id, 18)} 的隧道吗？`
-          : confirmAct?.kind === 'delMig' ? `确定撤销实例 ${shortId(confirmAct.item.instanceId, 18)} 的迁移引导记录吗？`
           : confirmAct?.kind === 'batchDel' ? `确定处理选中的 ${selectedIds.size} 个实例（在线踢出、离线删除）吗？`
           : `确定移除离线实例 ${shortId(confirmAct?.item?.id ?? '', 18)} 的历史记录吗？`}
         confirmText="确认执行" onCancel={() => setConfirmAct(null)} onConfirm={executeConfirm} />

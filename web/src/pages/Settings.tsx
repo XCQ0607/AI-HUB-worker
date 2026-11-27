@@ -149,8 +149,6 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
               <Badge tone={data.registerSecretSet ? 'ok' : 'neutral'}>{data.registerSecretSet ? '已启用校验' : '未设置'}</Badge></div>
             <div className="kv-row"><span className="muted">Cloudflare R2 (BLOB / OTA)</span>
               <Badge tone={data.r2Enabled ? 'ok' : 'warn'}>{data.r2Enabled ? '已绑定' : '未绑定'}</Badge></div>
-            <div className="kv-row"><span className="muted">iOS APNs 密钥 (APNS_*)</span>
-              <Badge tone={data.apnsEnabled ? 'ok' : 'neutral'}>{data.apnsEnabled ? '已配置' : '未配置'}</Badge></div>
             <div className="kv-row"><span className="muted">OTA 发布令牌 (PLATFORM_OTA_CONTROL_TOKEN)</span>
               <Badge tone={data.otaTokenSet ? 'ok' : 'neutral'}>{data.otaTokenSet ? '已配置' : '仅管理员面板可用'}</Badge></div>
             <div className="kv-row"><span className="muted">联邦角色</span>
@@ -171,7 +169,7 @@ export function SettingsPage({ onLogout }: { onLogout: () => void }) {
               </div>
             </label>
             <p className="muted small">
-              选择「仅保留凭据摘要」时，中转不再缓存会话/工作区列表正文，但仍保留已配对手机的凭据摘要，以确保 <code>/push-token</code> 与 <code>/blob/*</code> 鉴权正常工作。
+              选择「仅保留凭据摘要」时，中转不再缓存会话/工作区列表正文，但仍保留已配对手机的凭据摘要，以确保 <code>/blob/*</code> 鉴权正常工作。
             </p>
             <label>慢隧道回退阈值 (ms，0 = 仅断线时兜底)
               <div className="btn-row">

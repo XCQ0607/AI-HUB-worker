@@ -1,6 +1,5 @@
 import { DurableObject } from 'cloudflare:workers'
 import { Admin, json, normClaim, type AdminEnv, type Live, type TunnelInfo } from './admin'
-import { ApnsService } from './apns'
 import { MirrorStore } from './mirror'
 import { OtaStore } from './ota'
 import { WebhookService } from './webhook'
@@ -85,7 +84,6 @@ function closeReason(s: string): string {
 export class Hub extends DurableObject<Env> {
   private admin: Admin
   private mirror: MirrorStore
-  private apns: ApnsService
   private ota: OtaStore
   private webhook: WebhookService
   private pending = new Map<number, Pend>()
@@ -103,7 +101,6 @@ export class Hub extends DurableObject<Env> {
     super(ctx, env)
     this.admin = new Admin(ctx.storage.sql, env)
     this.mirror = new MirrorStore(ctx.storage.sql)
-    this.apns = new ApnsService(ctx.storage.sql, env)
     this.ota = new OtaStore(ctx.storage.sql, env)
     this.webhook = new WebhookService(ctx.storage.sql)
     if (this.admin.isSlave && env.PLATFORM_CLAIM_CODE?.trim()) {
@@ -169,7 +166,6 @@ export class Hub extends DurableObject<Env> {
       return true
     },
     mirror: null as unknown as MirrorStore,
-    apns: null as unknown as ApnsService,
     ota: null as unknown as OtaStore,
     webhook: null as unknown as WebhookService,
     waitUntil: (p: Promise<unknown>) => this.ctx.waitUntil(p),
@@ -193,7 +189,6 @@ export class Hub extends DurableObject<Env> {
 
   private getLive(): Live {
     this.live.mirror = this.mirror
-    this.live.apns = this.apns
     this.live.ota = this.ota
     this.live.webhook = this.webhook
     return this.live
@@ -230,37 +225,15 @@ export class Hub extends DurableObject<Env> {
           tunnels: live.tunnels().length,
           mirror: this.mirror.stats(),
           blob: { enabled: !!this.env.BLOB, count: n('SELECT COUNT(*) c FROM blobs'), bytes: n('SELECT COALESCE(SUM(size),0) c FROM blobs'), evicted: this.blobEvicted },
-          apns: { enabled: this.apns.enabled(), tokens: this.apns.countTokens() },
           plugins: this.pluginSummary(),
           tunnelUnregisteredTimeouts: this.unregTimeouts,
         })
       }
-      case '/api/mobile/v1/push-token': return this.handlePushToken(req)
       case '/': return notFound()
     }
     const bi = path.indexOf('/api/mobile/v1/blob/')
     if (bi >= 0 && this.env.BLOB) return this.blobGet(req, path.slice(bi + '/api/mobile/v1/blob/'.length))
     return this.forward(req, url, path)
-  }
-
-  private async handlePushToken(req: Request): Promise<Response> {
-    if (req.method !== 'POST') return json(405, { ok: false, error: 'method not allowed' })
-    const instance = (req.headers.get('x-dsh-instance') ?? '').trim()
-    const creds = presentedCredentials(req)
-    if (!creds.length) return json(401, { ok: false, error: 'device credential required' })
-    if (!instance) return json(400, { ok: false, error: 'x-dsh-instance required' })
-    if (!(await this.mirror.credentialOk(instance, creds))) return json(403, { ok: false, error: 'bad device credential' })
-    let body: any
-    try { body = await req.json() } catch { body = {} }
-    const deviceId = String(body?.deviceId ?? '').trim()
-    const token = String(body?.token ?? '').trim()
-    const platform = String(body?.platform ?? 'ios').trim() || 'ios'
-    if (!deviceId || !token) return json(400, { ok: false, error: 'deviceId and token are required' })
-    this.apns.upsertToken(instance, deviceId, platform, token)
-    if (body?.prefs && typeof body.prefs === 'object') {
-      this.apns.upsertPrefs(instance, deviceId, JSON.stringify(body.prefs))
-    }
-    return json(200, { ok: true })
   }
 
   // ---------- tunnel (host side) ----------
@@ -364,30 +337,6 @@ export class Hub extends DurableObject<Env> {
       case T.sync: {
         if (!att.reg || !att.instance) return
         this.mirror.remember(att.instance, parseJson(f.payload), this.admin.mirrorEnabled)
-        return
-      }
-      case T.pushRegister: {
-        if (!att.reg || !att.instance) return
-        const r = parseJson(f.payload)
-        const dev = String(r?.deviceId ?? '').trim()
-        if (!dev) return
-        if (r?.action === 'delete') this.apns.deleteDevice(att.instance, dev)
-        else if (typeof r?.token === 'string' && r.token) this.apns.upsertToken(att.instance, dev, String(r.platform ?? 'ios'), r.token)
-        return
-      }
-      case T.pushSend: {
-        if (!att.reg || !att.instance) return
-        const r = parseJson(f.payload)
-        if (r) this.ctx.waitUntil(Promise.all([this.apns.sendCompletion(att.instance, r), this.webhook.dispatchPush(att.instance, r)]))
-        return
-      }
-      case T.migrate: {
-        if (!att.reg || !att.instance) return
-        const m = parseJson(f.payload)
-        if (!m || typeof m.to !== 'string') return
-        const dest = m.to.trim().slice(0, 512)
-        if (/[\r\n\x00-\x1f\x7f]/.test(dest)) return
-        this.admin.setMigration(att.instance, dest)
         return
       }
       case T.blobPut: await this.blobPut(ws, att, f.id, parseJson(f.payload)); return
@@ -598,7 +547,6 @@ export class Hub extends DurableObject<Env> {
           mirrorEnabled: this.admin.mirrorEnabled,
           mirrorInstances: mirror.instances,
           mirrorBytes: mirror.bytes,
-          apnsEnabled: this.apns.enabled(),
           doLocation: (this.env.DO_LOCATION ?? '').trim().toLowerCase(),
           minVersion: this.admin.minVersion,
           reportIntervalSeconds,
@@ -689,9 +637,6 @@ export class Hub extends DurableObject<Env> {
         return notFound()
       }
     } else if (!tun) {
-      // Migration ledger always takes priority over offline mirror fallback.
-      const to = this.admin.migration(instance)
-      if (to) return json(503, { ok: false, code: 'migrated', to, error: 'that host moved to another relay' }, { 'x-dsh-migrated-to': to })
       if (mirrorRead) {
         const hit = await this.mirror.lookup(instance, mirrorRead.kind, mirrorRead.rev, presentedCredentials(req))
         if (hit) {

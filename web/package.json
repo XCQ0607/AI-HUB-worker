@@ -1,7 +1,7 @@
 {
   "name": "ai-hub-web",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "scripts": { "dev": "vite", "build": "tsc --noEmit && vite build", "typecheck": "tsc --noEmit" },
   "dependencies": { "lucide-react": "^0.468.0", "react": "^19.0.0", "react-dom": "^19.0.0" },
