@@ -1,7 +1,7 @@
 {
   "upstream": "WNLUO/dsh-mobile-server",
-  "commit": "e729dd85c2d62d7100eb3c3fd0f2d0f62340ba4c",
-  "relayVersion": "0.1.30",
+  "commit": "aa8e96a9a613897487a28940a4701473c1ca52c2",
+  "relayVersion": "0.1.32",
   "headerLen": 9,
   "mobilePrefix": "/api/mobile/v1/",
   "ownedPaths": [
@@ -9,7 +9,6 @@
     "/healthz",
     "/status",
     "/api/mobile/v1/health",
-    "/api/mobile/v1/push-token",
     "/tunnel"
   ],
   "reservedCloseCodes": [
@@ -44,8 +43,6 @@
     "sync": "0x17",
     "revokeAll": "0x18",
     "revokeAllAck": "0x19",
-    "pushRegister": "0x1a",
-    "pushSend": "0x1b",
     "migrate": "0x1c",
     "blobPut": "0x1d",
     "blobDelete": "0x1e"

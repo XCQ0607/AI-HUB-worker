@@ -1,8 +1,8 @@
 // AUTO-GENERATED from protocol/upstream.lock.json — DO NOT EDIT.
-// Upstream: WNLUO/dsh-mobile-server@e729dd85c2d62d7100eb3c3fd0f2d0f62340ba4c (relay v0.1.30)
+// Upstream: WNLUO/dsh-mobile-server@aa8e96a9a613897487a28940a4701473c1ca52c2 (relay v0.1.32)
 
-export const UPSTREAM_COMMIT = 'e729dd85c2d62d7100eb3c3fd0f2d0f62340ba4c'
-export const UPSTREAM_RELAY_VERSION = '0.1.30'
+export const UPSTREAM_COMMIT = 'aa8e96a9a613897487a28940a4701473c1ca52c2'
+export const UPSTREAM_RELAY_VERSION = '0.1.32'
 
 export const T = {
   register: 0x01,
@@ -30,8 +30,6 @@ export const T = {
   sync: 0x17,
   revokeAll: 0x18,
   revokeAllAck: 0x19,
-  pushRegister: 0x1a,
-  pushSend: 0x1b,
   migrate: 0x1c,
   blobPut: 0x1d,
   blobDelete: 0x1e,
@@ -39,5 +37,5 @@ export const T = {
 
 export const HEADER_LEN = 9
 export const RESERVED_CLOSE_CODES: readonly number[] = [1004, 1005, 1006, 1015]
-export const OWNED_PATHS: readonly string[] = ['/', '/healthz', '/status', '/api/mobile/v1/health', '/api/mobile/v1/push-token', '/tunnel']
+export const OWNED_PATHS: readonly string[] = ['/', '/healthz', '/status', '/api/mobile/v1/health', '/tunnel']
 export const MOBILE_PREFIX = '/api/mobile/v1/'
